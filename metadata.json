@@ -1,0 +1,6 @@
+{
+  "name": "PROJECT VENTURA",
+  "description": "Aplikasi pencatatan data pertanahan desa terintegrasi Google Sheets dan Google Drive untuk pengisian data lahan, tanaman, bangunan, berkas KTP, KK, Alas Hak, dan verifikasi QC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
