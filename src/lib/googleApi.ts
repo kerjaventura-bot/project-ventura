@@ -5,6 +5,23 @@ export const SPREADSHEET_NAME = "Data_Pertanahan_Desa_SIP";
 export const MAIN_FOLDER_NAME = "SIP_Berkas_Pertanahan_Desa";
 
 /**
+ * Extracts and throws detailed error messages from Google API response bodies
+ */
+async function handleResponseError(response: Response, defaultMessage: string): Promise<never> {
+  let detail = "";
+  try {
+    const data = await response.json();
+    if (data && data.error && data.error.message) {
+      detail = data.error.message;
+    }
+  } catch (e) {
+    // ignore non-json errors
+  }
+  const errorMessage = detail ? `${defaultMessage}: ${detail}` : `${defaultMessage} (${response.statusText || 'HTTP ' + response.status})`;
+  throw new Error(errorMessage);
+}
+
+/**
  * Searches for the master spreadsheet in Drive.
  * If not found, creates it and initializes headers.
  */
@@ -21,7 +38,7 @@ export async function findOrCreateSpreadsheet(accessToken: string, spreadsheetNa
     });
     
     if (!response.ok) {
-      throw new Error(`Gagal mencari spreadsheet: ${response.statusText}`);
+      await handleResponseError(response, "Gagal mencari spreadsheet");
     }
     
     const data = await response.json();
@@ -48,7 +65,7 @@ export async function findOrCreateSpreadsheet(accessToken: string, spreadsheetNa
     });
     
     if (!createResponse.ok) {
-      throw new Error(`Gagal membuat spreadsheet baru di Drive: ${createResponse.statusText}`);
+      await handleResponseError(createResponse, "Gagal membuat spreadsheet baru di Drive");
     }
     
     const spreadsheet = await createResponse.json();
@@ -122,7 +139,7 @@ export async function fetchSpreadsheetRecords(accessToken: string, spreadsheetId
     });
     
     if (!response.ok) {
-      throw new Error(`Gagal mengambil data dari spreadsheet: ${response.statusText}`);
+      await handleResponseError(response, "Gagal mengambil data dari spreadsheet");
     }
     
     const data = await response.json();
@@ -316,7 +333,7 @@ export async function saveRecordToSpreadsheet(
       });
       
       if (!response.ok) {
-        throw new Error(`Gagal mengupdate baris spreadsheet: ${response.statusText}`);
+        await handleResponseError(response, "Gagal mengupdate baris spreadsheet");
       }
     } else {
       // Append a new row
@@ -332,7 +349,7 @@ export async function saveRecordToSpreadsheet(
       });
       
       if (!response.ok) {
-        throw new Error(`Gagal menyisipkan baris baru ke spreadsheet: ${response.statusText}`);
+        await handleResponseError(response, "Gagal menyisipkan baris baru ke spreadsheet");
       }
     }
   } catch (err) {
@@ -364,7 +381,7 @@ export async function findOrCreateFolder(
     });
     
     if (!response.ok) {
-      throw new Error(`Gagal mencari folder: ${response.statusText}`);
+      await handleResponseError(response, "Gagal mencari folder");
     }
     
     const data = await response.json();
@@ -407,7 +424,7 @@ export async function findOrCreateFolder(
     });
     
     if (!createResponse.ok) {
-      throw new Error(`Gagal membuat folder baru: ${createResponse.statusText}`);
+      await handleResponseError(createResponse, "Gagal membuat folder baru");
     }
     
     const folder = await createResponse.json();

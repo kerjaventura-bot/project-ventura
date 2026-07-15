@@ -104,6 +104,17 @@ export default function App() {
   const [newFieldPin, setNewFieldPin] = useState('');
   const [newQcPin, setNewQcPin] = useState('');
 
+  // Project ID configuration & Syncing tools
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editSpreadsheetId, setEditSpreadsheetId] = useState('');
+  const [editFolderId, setEditFolderId] = useState('');
+  const [editUploadsFolderId, setEditUploadsFolderId] = useState('');
+  
+  const [showBackupTools, setShowBackupTools] = useState(false);
+  const [backupJsonString, setBackupJsonString] = useState('');
+  const [importStatus, setImportStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [importMessage, setImportMessage] = useState('');
+
   // Initialize auth state
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((currentUser) => {
@@ -333,6 +344,124 @@ export default function App() {
     localStorage.setItem('project_ventura_role_pins', JSON.stringify(updatedPins));
     setShowPinSettings(false);
     alert("PIN Akses berhasil diperbarui!");
+  };
+
+  // Start editing manual Spreadsheet & Folder IDs for a project
+  const startEditingProject = (proj: ProjectConfig) => {
+    setEditingProjectId(proj.id);
+    setEditSpreadsheetId(proj.spreadsheetId || '');
+    setEditFolderId(proj.folderId || '');
+    setEditUploadsFolderId(proj.uploadsFolderId || '');
+  };
+
+  // Cancel editing IDs
+  const cancelEditingProject = () => {
+    setEditingProjectId(null);
+    setEditSpreadsheetId('');
+    setEditFolderId('');
+    setEditUploadsFolderId('');
+  };
+
+  // Save manual Spreadsheet & Folder IDs
+  const handleSaveProjectIDs = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProjectId) return;
+
+    const updated = projects.map(p => {
+      if (p.id === editingProjectId) {
+        return {
+          ...p,
+          spreadsheetId: editSpreadsheetId.trim() || null,
+          folderId: editFolderId.trim() || null,
+          uploadsFolderId: editUploadsFolderId.trim() || null
+        };
+      }
+      return p;
+    });
+
+    setProjects(updated);
+    localStorage.setItem('project_ventura_projects', JSON.stringify(updated));
+
+    // Force data reload if we just edited the active project
+    if (activeProjectId === editingProjectId) {
+      setSpreadsheetId(editSpreadsheetId.trim() || null);
+      setProjectUploadsFolderId(editUploadsFolderId.trim() || null);
+      if (token) {
+        loadProjectData(token, activeProjectId);
+      }
+    }
+
+    cancelEditingProject();
+    alert("Konfigurasi ID Google Drive / Sheets berhasil disimpan!");
+  };
+
+  // Copy full project settings JSON to Clipboard
+  const handleExportConfig = () => {
+    const jsonStr = JSON.stringify(projects, null, 2);
+    navigator.clipboard.writeText(jsonStr)
+      .then(() => {
+        alert("Konfigurasi proyek berhasil disalin ke Clipboard! Silakan paste (tempel) di menu Impor di web Anda.");
+      })
+      .catch(err => {
+        console.error("Gagal menyalin:", err);
+        // Fallback: show in textarea
+        setBackupJsonString(jsonStr);
+        alert("Gagal otomatis menyalin. Silakan salin teks dari kotak yang muncul di bawah.");
+      });
+  };
+
+  // Import project settings from JSON
+  const handleImportConfig = (e: React.FormEvent) => {
+    e.preventDefault();
+    setImportStatus('idle');
+    setImportMessage('');
+
+    if (!backupJsonString.trim()) {
+      setImportStatus('error');
+      setImportMessage('Masukkan kode konfigurasi terlebih dahulu.');
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(backupJsonString.trim());
+      if (!Array.isArray(parsed)) {
+        throw new Error("Data konfigurasi harus berupa Array.");
+      }
+
+      // Basic structure validation
+      const isValid = parsed.every(p => p && typeof p === 'object' && p.id && p.name);
+      if (!isValid) {
+        throw new Error("Format data tidak valid. Pastikan setiap proyek memiliki ID dan Nama.");
+      }
+
+      setProjects(parsed);
+      localStorage.setItem('project_ventura_projects', JSON.stringify(parsed));
+      
+      // Select the first project as active
+      if (parsed.length > 0) {
+        setActiveProjectId(parsed[0].id);
+        localStorage.setItem('project_ventura_active_project_id', parsed[0].id);
+        
+        // Force refresh active spreadsheet configuration
+        setSpreadsheetId(parsed[0].spreadsheetId || null);
+        setProjectUploadsFolderId(parsed[0].uploadsFolderId || null);
+        
+        if (token) {
+          loadProjectData(token, parsed[0].id);
+        }
+      }
+
+      setImportStatus('success');
+      setImportMessage('Konfigurasi berhasil diimpor! Data Anda sekarang sepenuhnya sinkron.');
+      setBackupJsonString('');
+      setTimeout(() => {
+        setShowBackupTools(false);
+        setImportStatus('idle');
+      }, 3000);
+    } catch (err: any) {
+      setImportStatus('error');
+      setImportMessage(`Gagal mengimpor: ${err.message || 'Format tidak valid.'}`);
+    }
   };
 
   // Initialize Admin PIN settings form on open
@@ -871,6 +1000,19 @@ export default function App() {
                   <Settings className="w-3.5 h-3.5 shrink-0" />
                   Kelola PIN Akses
                 </button>
+
+                {/* Backup & Sync Database Button */}
+                <button
+                  onClick={() => setShowBackupTools(!showBackupTools)}
+                  className={`w-full text-left px-4 py-2.5 rounded-xl text-[11px] font-bold transition-all flex items-center gap-2.5 cursor-pointer border ${
+                    showBackupTools 
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' 
+                      : 'border-transparent text-slate-400 hover:bg-white/5 hover:text-white'
+                  }`}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 shrink-0" />
+                  Ekspor & Impor Database
+                </button>
               </div>
             )}
 
@@ -926,29 +1068,120 @@ export default function App() {
                   </div>
                 </form>
 
-                {/* List of current projects with Delete option */}
-                <div className="border-t border-white/5 pt-3 mt-3">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-2">Daftar Jalur Saat Ini:</span>
-                  <div className="max-h-[140px] overflow-y-auto space-y-1.5 pr-1 scrollbar-thin">
-                    {projects.map(proj => (
-                      <div key={proj.id} className="flex justify-between items-center bg-white/5 px-3 py-2 rounded-lg text-xs border border-white/5">
-                        <span className="font-bold text-slate-200 truncate pr-4">{proj.name}</span>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-[8px] font-mono font-semibold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300">
-                            {proj.spreadsheetId ? 'Tersinkron' : 'Belum Setup'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteProject(proj.id)}
-                            className="text-rose-400 hover:text-rose-300 text-[10px] font-bold px-2 py-1 bg-rose-500/10 rounded-md cursor-pointer border border-rose-500/15 hover:bg-rose-500/20"
-                          >
-                            Hapus
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                 {/* List of current projects with Delete & Edit option */}
+                 <div className="border-t border-white/5 pt-3 mt-3">
+                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-2">Daftar Jalur Saat Ini & ID Koneksi:</span>
+                   <div className="max-h-[180px] overflow-y-auto space-y-1.5 pr-1 scrollbar-thin">
+                     {projects.map(proj => (
+                       <div key={proj.id} className="flex flex-col gap-1 bg-white/5 p-3 rounded-lg border border-white/5">
+                         <div className="flex justify-between items-center text-xs">
+                           <span className="font-bold text-slate-200 truncate pr-4">{proj.name}</span>
+                           <div className="flex items-center gap-1.5 shrink-0">
+                             <span className="text-[8px] font-mono font-semibold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300">
+                               {proj.spreadsheetId ? 'Tersinkron' : 'Belum Setup'}
+                             </span>
+                             <button
+                               type="button"
+                               onClick={() => startEditingProject(proj)}
+                               className="text-amber-400 hover:text-amber-300 text-[10px] font-bold px-2 py-1 bg-amber-500/10 rounded-md cursor-pointer border border-amber-500/15 hover:bg-amber-500/20"
+                               title="Edit Manual ID Spreadsheet & Folder"
+                             >
+                               Edit ID
+                             </button>
+                             <button
+                               type="button"
+                               onClick={() => handleDeleteProject(proj.id)}
+                               className="text-rose-400 hover:text-rose-300 text-[10px] font-bold px-2 py-1 bg-rose-500/10 rounded-md cursor-pointer border border-rose-500/15 hover:bg-rose-500/20"
+                             >
+                               Hapus
+                             </button>
+                           </div>
+                         </div>
+                         {proj.spreadsheetId && (
+                           <div className="text-[9px] font-mono text-slate-500 truncate pt-1 border-t border-white/5 flex flex-col gap-0.5">
+                             <span>Sheet ID: <span className="text-slate-400">{proj.spreadsheetId}</span></span>
+                             {proj.folderId && <span>Folder ID: <span className="text-slate-400">{proj.folderId}</span></span>}
+                           </div>
+                         )}
+                       </div>
+                     ))}
+                   </div>
+                 </div>
+
+                 {/* Manual IDs editor section */}
+                 {editingProjectId && (
+                   <form onSubmit={handleSaveProjectIDs} className="mt-4 p-4 bg-slate-900 rounded-xl border border-amber-500/30 space-y-3 animate-fadeIn">
+                     <div className="flex items-center justify-between">
+                       <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider block">
+                         Edit ID Google Drive & Sheets untuk Jalur:
+                       </span>
+                       <button 
+                         type="button"
+                         onClick={cancelEditingProject}
+                         className="text-slate-400 hover:text-slate-200 font-bold text-xs"
+                       >
+                         ✕
+                       </button>
+                     </div>
+                     <p className="text-[11px] text-white font-bold font-mono truncate">
+                       {projects.find(p => p.id === editingProjectId)?.name}
+                     </p>
+                     
+                     <div className="space-y-3">
+                       <div>
+                         <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Google Spreadsheet ID</label>
+                         <input
+                           type="text"
+                           required
+                           value={editSpreadsheetId}
+                           onChange={(e) => setEditSpreadsheetId(e.target.value)}
+                           placeholder="Contoh: 1aBcDeFgH123456789..."
+                           className="w-full px-2.5 py-1.5 bg-slate-950 border border-white/10 rounded-lg text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
+                         />
+                         <span className="text-[8px] text-slate-500 leading-none">ID dari URL spreadsheet: https://docs.google.com/spreadsheets/d/<span className="font-bold text-slate-400">SPREADSHEET_ID</span>/edit</span>
+                       </div>
+                       
+                       <div className="grid grid-cols-2 gap-2">
+                         <div>
+                           <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Folder Utama ID (Optional)</label>
+                           <input
+                             type="text"
+                             value={editFolderId}
+                             onChange={(e) => setEditFolderId(e.target.value)}
+                             placeholder="Contoh: 1XyZ..."
+                             className="w-full px-2.5 py-1.5 bg-slate-950 border border-white/10 rounded-lg text-xs text-slate-200 font-mono focus:outline-none"
+                           />
+                         </div>
+                         <div>
+                           <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Folder PDF ID (Optional)</label>
+                           <input
+                             type="text"
+                             value={editUploadsFolderId}
+                             onChange={(e) => setEditUploadsFolderId(e.target.value)}
+                             placeholder="Contoh: 1AbC..."
+                             className="w-full px-2.5 py-1.5 bg-slate-950 border border-white/10 rounded-lg text-xs text-slate-200 font-mono focus:outline-none"
+                           />
+                         </div>
+                       </div>
+                     </div>
+
+                     <div className="flex justify-end gap-1.5 pt-1.5 border-t border-white/5">
+                       <button
+                         type="button"
+                         onClick={cancelEditingProject}
+                         className="px-3 py-1.5 bg-slate-950 hover:bg-slate-900 text-slate-400 text-[10px] font-bold rounded-lg border border-white/10"
+                       >
+                         Batal
+                       </button>
+                       <button
+                         type="submit"
+                         className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold rounded-lg"
+                       >
+                         Simpan ID & Sinkronkan
+                       </button>
+                     </div>
+                   </form>
+                 )}
               </div>
             )}
 
@@ -1010,6 +1243,81 @@ export default function App() {
                   </button>
                 </div>
               </form>
+            )}
+
+            {/* Backup & Import Configurations Tools */}
+            {role === 'ADMIN' && showBackupTools && (
+              <div className="glass-card p-5 rounded-2xl border border-emerald-500/30 shadow-lg space-y-4 animate-fadeIn" id="admin_backup_sync">
+                <div className="flex items-center gap-1.5 text-emerald-300 text-xs font-bold uppercase tracking-wider">
+                  <RefreshCw className="w-4 h-4 text-emerald-400" />
+                  Alat Migrasi & Sinkronisasi Database (Google Drive & Sheets)
+                </div>
+                
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Gunakan alat ini untuk memindahkan konfigurasi ID Spreadsheet/Folder Google Drive Anda dari halaman Pratinjau (AI Studio) ke Web Mandiri Anda (atau sebaliknya). Ini memastikan data Anda yang berisi ribuan baris langsung tersambung sempurna tanpa harus setup ulang.
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-1">
+                  {/* Export section */}
+                  <div className="bg-slate-900/60 p-4 rounded-xl border border-white/5 space-y-3">
+                    <span className="text-[10px] font-extrabold text-emerald-300 uppercase tracking-wider block">1. Ekspor Konfigurasi</span>
+                    <p className="text-[11px] text-slate-400">
+                      Klik tombol di bawah untuk menyalin seluruh konfigurasi ID jalur proyek saat ini ke clipboard Anda.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleExportConfig}
+                      className="w-full py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 hover:text-emerald-200 border border-emerald-500/30 text-xs font-bold rounded-xl cursor-pointer transition-all"
+                    >
+                      Salin Kode Konfigurasi Ke Clipboard
+                    </button>
+                    <p className="text-[9px] text-slate-500 italic">
+                      Lakukan ini di halaman tempat data Anda muncul dengan benar (misalnya di panel Pratinjau AI Studio).
+                    </p>
+                  </div>
+
+                  {/* Import section */}
+                  <form onSubmit={handleImportConfig} className="bg-slate-900/60 p-4 rounded-xl border border-white/5 space-y-3">
+                    <span className="text-[10px] font-extrabold text-indigo-300 uppercase tracking-wider block">2. Impor Konfigurasi</span>
+                    <p className="text-[11px] text-slate-400">
+                      Tempel (paste) kode konfigurasi yang telah Anda ekspor di sini untuk menyinkronkan seluruh ID secara instan.
+                    </p>
+                    <textarea
+                      rows={3}
+                      value={backupJsonString}
+                      onChange={(e) => setBackupJsonString(e.target.value)}
+                      placeholder='Tempel kode JSON di sini (diawali dengan "[" dan diakhiri "]")'
+                      className="w-full px-3 py-2 bg-slate-950 border border-white/10 rounded-xl text-[11px] font-mono text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                    
+                    {importStatus === 'success' && (
+                      <p className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20">{importMessage}</p>
+                    )}
+                    {importStatus === 'error' && (
+                      <p className="text-[10px] text-rose-400 font-bold bg-rose-500/10 px-2 py-1 rounded border border-rose-500/20">{importMessage}</p>
+                    )}
+
+                    <div className="flex justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBackupJsonString('');
+                          setImportStatus('idle');
+                        }}
+                        className="px-3 py-1.5 bg-slate-950 hover:bg-slate-900 text-slate-400 text-xs font-bold rounded-lg border border-white/10"
+                      >
+                        Clear
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-lg"
+                      >
+                        Impor & Sinkronkan
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
             )}
 
             {/* Main view container display state */}
