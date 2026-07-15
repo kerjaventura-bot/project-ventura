@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
-  googleSignIn, logout, auth, setAccessToken 
+  googleSignIn, logout, auth, setAccessToken, db
 } from './lib/firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { 
   findOrCreateSpreadsheet, fetchSpreadsheetRecords, saveRecordToSpreadsheet, setupProjectDriveStructure, findOrCreateFolder 
 } from './lib/googleApi';
@@ -115,11 +116,53 @@ export default function App() {
   const [importStatus, setImportStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [importMessage, setImportMessage] = useState('');
 
+  // Save projects to Firestore cloud database (so other accounts can sync automatically)
+  const saveProjectsToCloud = async (updatedProjects: ProjectConfig[]) => {
+    try {
+      await setDoc(doc(db, 'configs', 'projects'), {
+        projectsList: updatedProjects,
+        lastUpdated: Date.now(),
+        updatedBy: user?.email || 'unknown'
+      });
+      console.log("Konfigurasi proyek berhasil disimpan di Firestore cloud!");
+    } catch (err) {
+      console.warn("Gagal menyimpan ke Firestore cloud (Mungkin Firestore belum diaktifkan):", err);
+    }
+  };
+
+  // Load projects from Firestore cloud database (for automatic cross-device sync)
+  const loadProjectsFromCloud = useCallback(async () => {
+    try {
+      const docRef = doc(db, 'configs', 'projects');
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data && Array.isArray(data.projectsList) && data.projectsList.length > 0) {
+          setProjects(data.projectsList);
+          localStorage.setItem('project_ventura_projects', JSON.stringify(data.projectsList));
+          console.log("Konfigurasi proyek disinkronkan dari Firestore cloud!");
+          
+          // Also verify active project still exists
+          const currentActive = localStorage.getItem('project_ventura_active_project_id') || 'proj-1';
+          const activeExists = data.projectsList.some((p: any) => p.id === currentActive);
+          if (!activeExists) {
+            const fallbackId = data.projectsList[0].id;
+            setActiveProjectId(fallbackId);
+            localStorage.setItem('project_ventura_active_project_id', fallbackId);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Gagal mengambil dari Firestore cloud (Menggunakan local storage):", err);
+    }
+  }, []);
+
   // Initialize auth state
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((currentUser) => {
       if (currentUser) {
         setUser(currentUser);
+        loadProjectsFromCloud();
       } else {
         setUser(null);
         setToken(null);
@@ -128,7 +171,7 @@ export default function App() {
       }
     });
     return () => unsubscribe();
-  }, []);
+  }, [loadProjectsFromCloud]);
 
   // Handle SignIn action
   const handleLogin = async () => {
@@ -193,6 +236,7 @@ export default function App() {
         });
         setProjects(updatedProjects);
         localStorage.setItem('project_ventura_projects', JSON.stringify(updatedProjects));
+        saveProjectsToCloud(updatedProjects);
       }
       
       setSpreadsheetId(sheetId);
@@ -306,6 +350,7 @@ export default function App() {
     const updated = [...projects, newProj];
     setProjects(updated);
     localStorage.setItem('project_ventura_projects', JSON.stringify(updated));
+    saveProjectsToCloud(updated);
     setActiveProjectId(newProj.id);
     localStorage.setItem('project_ventura_active_project_id', newProj.id);
     
@@ -323,6 +368,7 @@ export default function App() {
       const updated = projects.filter(p => p.id !== id);
       setProjects(updated);
       localStorage.setItem('project_ventura_projects', JSON.stringify(updated));
+      saveProjectsToCloud(updated);
       if (activeProjectId === id) {
         const nextActive = updated[0].id;
         setActiveProjectId(nextActive);
@@ -381,6 +427,7 @@ export default function App() {
 
     setProjects(updated);
     localStorage.setItem('project_ventura_projects', JSON.stringify(updated));
+    saveProjectsToCloud(updated);
 
     // Force data reload if we just edited the active project
     if (activeProjectId === editingProjectId) {
@@ -436,6 +483,7 @@ export default function App() {
 
       setProjects(parsed);
       localStorage.setItem('project_ventura_projects', JSON.stringify(parsed));
+      saveProjectsToCloud(parsed);
       
       // Select the first project as active
       if (parsed.length > 0) {
