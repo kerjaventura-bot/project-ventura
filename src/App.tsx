@@ -377,6 +377,20 @@ export default function App() {
     };
   };
 
+  // Save records cache to Firestore so guests can access real data automatically
+  const saveRecordsToFirestoreCache = async (projectId: string, list: LandRecord[]) => {
+    try {
+      await setDoc(doc(db, 'records_cache', projectId), {
+        records: list,
+        lastUpdated: Date.now(),
+        updatedBy: user?.email || 'admin/user'
+      });
+      console.log("Records cache updated in Firestore successfully for project:", projectId);
+    } catch (err) {
+      console.warn("Gagal menyimpan cache ke Firestore:", err);
+    }
+  };
+
   // Connect and load/create project-specific Google Drive/Spreadsheet
   const loadProjectData = useCallback(async (accessToken: string, projectId: string) => {
     setIsLoadingData(true);
@@ -423,20 +437,44 @@ export default function App() {
               return; // Success!
             }
           } catch (csvErr: any) {
-            console.error("Gagal mengambil data dari tautan Publik CSV, beralih ke cache lokal:", csvErr);
-            // Don't crash, fall back to localStorage cached data or default mocks
+            console.error("Gagal mengambil data dari tautan Publik CSV, beralih ke cache lokal/cloud:", csvErr);
+            // Don't crash, fall back to localStorage cached data or Firestore
           }
         }
 
-        // Try to load cached records
+        // Try to load cached records from localStorage first (for instant initial load)
         const cached = localStorage.getItem(`project_ventura_records_cache_${projectId}`);
+        let hasLoadedLocal = false;
         if (cached) {
           try {
-            setRecords(JSON.parse(cached));
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setRecords(parsed);
+              hasLoadedLocal = true;
+            }
           } catch (e) {
-            setRecords([]);
+            console.warn("Gagal membaca cache lokal:", e);
           }
-        } else {
+        }
+
+        // Fetch from Firestore cloud cache (always try this to get up-to-date data synced by Admin)
+        try {
+          const cacheRef = doc(db, 'records_cache', projectId);
+          const cacheSnap = await getDoc(cacheRef);
+          if (cacheSnap.exists()) {
+            const cacheData = cacheSnap.data();
+            if (cacheData && Array.isArray(cacheData.records) && cacheData.records.length > 0) {
+              setRecords(cacheData.records);
+              localStorage.setItem(`project_ventura_records_cache_${projectId}`, JSON.stringify(cacheData.records));
+              return; // Successfully got up-to-date real data from Firestore!
+            }
+          }
+        } catch (fsErr) {
+          console.warn("Gagal mengambil cache data dari Firestore:", fsErr);
+        }
+
+        // If we didn't get from Firestore and also have nothing in local storage, use the default mocks
+        if (!hasLoadedLocal) {
           // Fallback template records
           const mockList: LandRecord[] = [
             createMockRecord("VT-001", "Budi Santoso", "Sukamaju", "SPAN-1", "015", "250", "Lengkap", "Selesai", "APPROVED", "Semua berkas sudah valid"),
@@ -486,6 +524,8 @@ export default function App() {
       } catch (storageError) {
         console.warn("localStorage quota exceeded, unable to cache records locally:", storageError);
       }
+      // Save cache to Firestore so guests can access real data automatically
+      saveRecordsToFirestoreCache(projectId, sortedItems);
       setSheetNameInfo(activeProj.name);
     } catch (err: any) {
       console.error("Sync error:", err);
@@ -583,6 +623,9 @@ export default function App() {
     const updatedRecords = await fetchSpreadsheetRecords(token, spreadsheetId);
     const sortedRecords = [...updatedRecords].sort(compareLandRecords);
     setRecords(sortedRecords);
+
+    // Update Firestore cache
+    saveRecordsToFirestoreCache(activeProjectId, sortedRecords);
 
     // Save log asynchronously
     logActivity(record.CODE, logType, logDetails);
@@ -682,6 +725,9 @@ export default function App() {
     const refreshed = await fetchSpreadsheetRecords(token, spreadsheetId);
     const sortedRefreshed = [...refreshed].sort(compareLandRecords);
     setRecords(sortedRefreshed);
+
+    // Update Firestore cache
+    saveRecordsToFirestoreCache(activeProjectId, sortedRefreshed);
 
     // Save log asynchronously
     logActivity(updatedRecord.CODE, actionType, details);
