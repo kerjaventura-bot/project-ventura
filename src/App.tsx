@@ -836,19 +836,7 @@ export default function App() {
                   />
                 </div>
                 
-                {/* Default Credentials Hints */}
-                <div className="p-2.5 bg-white/5 rounded-lg text-[10px] text-slate-400 flex items-start gap-1.5 border border-white/5 leading-relaxed font-sans">
-                  <Info className="w-3.5 h-3.5 text-indigo-400 shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="block text-slate-300 mb-0.5">Sandi PIN Default Sistem:</strong>
-                    <p className="space-y-0.5">
-                      • Admin: <code className="text-white font-mono font-bold bg-indigo-500/20 px-1.5 py-0.5 rounded">admin123</code><br />
-                      • Lapangan: <code className="text-white font-mono font-bold bg-indigo-500/20 px-1.5 py-0.5 rounded">lapangan123</code><br />
-                      • Verifikator QC: <code className="text-white font-mono font-bold bg-indigo-500/20 px-1.5 py-0.5 rounded">qc123</code><br />
-                      • Tamu Kontraktor: <code className="text-white font-mono font-bold bg-indigo-500/20 px-1.5 py-0.5 rounded">tamu123</code> (atau kosong)
-                    </p>
-                  </div>
-                </div>
+
               </div>
 
               {pinError && (
