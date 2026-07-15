@@ -1,10 +1,9 @@
 {
-  "projectId": "mimetic-nebula-7dw77",
-  "appId": "1:886487809369:web:b29d3c6e807986c43fa048",
-  "apiKey": "AIzaSyCi0NkejAisi7SgC4-ecfeq2xRTu2Nw4-I",
-  "authDomain": "mimetic-nebula-7dw77.firebaseapp.com",
-  "storageBucket": "mimetic-nebula-7dw77.firebasestorage.app",
-  "messagingSenderId": "886487809369",
-  "measurementId": "",
-  "oAuthClientId": "886487809369-m361n50njf12euh5f9891tf1eov0k9lk.apps.googleusercontent.com"
+  "projectId": "ventura-project",
+  "appId": "1:347786932589:web:0714cdf03f9119f6a66a64",
+  "apiKey": "AIzaSyD0UWDT_uC5A801-TBP-_IdCoIE2CyK5gI",
+  "authDomain": "ventura-project.firebaseapp.com",
+  "storageBucket": "ventura-project.firebasestorage.app",
+  "messagingSenderId": "347786932589",
+  "measurementId": "G-QT08DLQ1MT"
 }
