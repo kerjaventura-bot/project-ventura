@@ -1,19 +1,20 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, 
   PieChart, Pie, Cell 
 } from 'recharts';
 import { 
   TrendingUp, FileText, CheckCircle2, Clock, AlertCircle, Map, Home, Sprout,
-  ShieldCheck, FolderCheck, CloudUpload, MapPin
+  ShieldCheck, FolderCheck, CloudUpload, MapPin, Search, X
 } from 'lucide-react';
 import type { LandRecord } from '../types';
 
 interface DashboardProps {
   records: LandRecord[];
+  role?: string | null;
 }
 
-export default function Dashboard({ records }: DashboardProps) {
+export default function Dashboard({ records, role }: DashboardProps) {
   // Statistics and Calculations
   const stats = useMemo(() => {
     const total = records.length;
@@ -93,6 +94,35 @@ export default function Dashboard({ records }: DashboardProps) {
       trabasBelum
     };
   }, [records]);
+
+  const [selectedCategory, setSelectedCategory] = useState<'SELESAI' | 'KONSINYASI' | 'BELUM' | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredRecordsByCategory = useMemo(() => {
+    if (!selectedCategory) return [];
+    return records.filter(r => {
+      if (selectedCategory === 'SELESAI') {
+        return r.PROGRES_PEMBERKASAN === 'SELESAI';
+      } else if (selectedCategory === 'KONSINYASI') {
+        return r.PROGRES_PEMBERKASAN === 'KONSINYASI';
+      } else { // 'BELUM'
+        return r.PROGRES_PEMBERKASAN !== 'SELESAI' && r.PROGRES_PEMBERKASAN !== 'KONSINYASI';
+      }
+    });
+  }, [records, selectedCategory]);
+
+  const searchedRecords = useMemo(() => {
+    if (!searchQuery.trim()) return filteredRecordsByCategory;
+    const q = searchQuery.toLowerCase();
+    return filteredRecordsByCategory.filter(r => {
+      return (
+        (r.DESA || '').toLowerCase().includes(q) ||
+        (r.SPAN || '').toLowerCase().includes(q) ||
+        (r.NOBID || '').toLowerCase().includes(q) ||
+        (r.KETERANGAN || '').toLowerCase().includes(q)
+      );
+    });
+  }, [filteredRecordsByCategory, searchQuery]);
 
   // Chart data: Distribution by DESA
   const desaChartData = useMemo(() => {
@@ -205,7 +235,9 @@ export default function Dashboard({ records }: DashboardProps) {
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight font-sans">Ringkasan Data Pertanahan Desa</h1>
           <p className="text-slate-300 text-sm mt-1">
-            Pantau progres berkas pertanahan, luas bidang tanah, bangunan, tanaman, dan hasil verifikasi QC.
+            {role === 'GUEST' 
+              ? 'Pantau progres berkas pertanahan, luas bidang tanah, bangunan, dan tanaman secara real-time.'
+              : 'Pantau progres berkas pertanahan, luas bidang tanah, bangunan, tanaman, dan hasil verifikasi QC.'}
           </p>
         </div>
         <div className="flex items-center gap-3 self-start md:self-center">
@@ -217,7 +249,7 @@ export default function Dashboard({ records }: DashboardProps) {
       </div>
 
       {/* KPI Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${role === 'GUEST' ? '' : 'lg:grid-cols-4'} gap-5`}>
         <div className="glass-card p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-white/15 hover:scale-[1.02] transition-all duration-300">
           <div className="p-3.5 rounded-xl bg-white/5 text-slate-300 border border-white/10 shadow-inner">
             <Map className="w-6 h-6" />
@@ -242,31 +274,35 @@ export default function Dashboard({ records }: DashboardProps) {
           </div>
         </div>
 
-        <div className="glass-card p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-white/15 hover:scale-[1.02] transition-all duration-300">
-          <div className="p-3.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-inner">
-            <CheckCircle2 className="w-6 h-6" />
-          </div>
-          <div>
-            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Lolos QC (Approved)</p>
-            <h3 className="text-2xl font-bold text-white font-sans mt-0.5">{stats.approved}</h3>
-            <p className="text-emerald-400 text-xs font-semibold mt-0.5">
-              {stats.total > 0 ? Math.round((stats.approved / stats.total) * 100) : 0}% Terverifikasi
-            </p>
-          </div>
-        </div>
+        {role !== 'GUEST' && (
+          <>
+            <div className="glass-card p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-white/15 hover:scale-[1.02] transition-all duration-300">
+              <div className="p-3.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-inner">
+                <CheckCircle2 className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Lolos QC (Approved)</p>
+                <h3 className="text-2xl font-bold text-white font-sans mt-0.5">{stats.approved}</h3>
+                <p className="text-emerald-400 text-xs font-semibold mt-0.5">
+                  {stats.total > 0 ? Math.round((stats.approved / stats.total) * 100) : 0}% Terverifikasi
+                </p>
+              </div>
+            </div>
 
-        <div className="glass-card p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-white/15 hover:scale-[1.02] transition-all duration-300">
-          <div className="p-3.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 shadow-inner">
-            <Clock className="w-6 h-6" />
-          </div>
-          <div>
-            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Menunggu QC (Pending)</p>
-            <h3 className="text-2xl font-bold text-white font-sans mt-0.5">{stats.pending}</h3>
-            <p className="text-slate-400 text-xs mt-0.5">
-              {stats.rejected} Bidang ditolak (Reject)
-            </p>
-          </div>
-        </div>
+            <div className="glass-card p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-white/15 hover:scale-[1.02] transition-all duration-300">
+              <div className="p-3.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 shadow-inner">
+                <Clock className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Menunggu QC (Pending)</p>
+                <h3 className="text-2xl font-bold text-white font-sans mt-0.5">{stats.pending}</h3>
+                <p className="text-slate-400 text-xs mt-0.5">
+                  {stats.rejected} Bidang ditolak (Reject)
+                </p>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* SECTION A: PROGRES PEMBERKASAN LAPANGAN */}
@@ -287,7 +323,23 @@ export default function Dashboard({ records }: DashboardProps) {
         {/* 3-Column Stats Card for Pemberkasan */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           {/* Selesai Card */}
-          <div className="glass-card p-5 rounded-2xl shadow-lg border border-white/5 flex flex-col justify-between hover:border-emerald-500/30 transition-all duration-300">
+          <div 
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              setSelectedCategory(prev => prev === 'SELESAI' ? null : 'SELESAI');
+              setSearchQuery('');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                setSelectedCategory(prev => prev === 'SELESAI' ? null : 'SELESAI');
+                setSearchQuery('');
+              }
+            }}
+            className={`glass-card p-5 rounded-2xl shadow-lg border flex flex-col justify-between hover:border-emerald-500/50 hover:scale-[1.01] active:scale-[0.99] transition-all duration-300 cursor-pointer ${
+              selectedCategory === 'SELESAI' ? 'ring-2 ring-emerald-500 bg-emerald-500/10 border-emerald-500/50' : 'border-white/5'
+            }`}
+          >
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider">Berkas Selesai</span>
               <span className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -311,10 +363,29 @@ export default function Dashboard({ records }: DashboardProps) {
                 style={{ width: `${stats.total > 0 ? Math.round((stats.pemberkasanSelesai / stats.total) * 100) : 0}%` }}
               ></div>
             </div>
+            {selectedCategory === 'SELESAI' && (
+              <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider text-right mt-2 block animate-pulse">▼ Tabel Aktif</span>
+            )}
           </div>
 
           {/* Konsinyasi Card */}
-          <div className="glass-card p-5 rounded-2xl shadow-lg border border-white/5 flex flex-col justify-between hover:border-amber-500/30 transition-all duration-300">
+          <div 
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              setSelectedCategory(prev => prev === 'KONSINYASI' ? null : 'KONSINYASI');
+              setSearchQuery('');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                setSelectedCategory(prev => prev === 'KONSINYASI' ? null : 'KONSINYASI');
+                setSearchQuery('');
+              }
+            }}
+            className={`glass-card p-5 rounded-2xl shadow-lg border flex flex-col justify-between hover:border-amber-500/50 hover:scale-[1.01] active:scale-[0.99] transition-all duration-300 cursor-pointer ${
+              selectedCategory === 'KONSINYASI' ? 'ring-2 ring-amber-500 bg-amber-500/10 border-amber-500/50' : 'border-white/5'
+            }`}
+          >
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-amber-400 uppercase tracking-wider">Berkas Konsinyasi</span>
               <span className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
@@ -338,10 +409,29 @@ export default function Dashboard({ records }: DashboardProps) {
                 style={{ width: `${stats.total > 0 ? Math.round((stats.pemberkasanKonsinyasi / stats.total) * 100) : 0}%` }}
               ></div>
             </div>
+            {selectedCategory === 'KONSINYASI' && (
+              <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wider text-right mt-2 block animate-pulse">▼ Tabel Aktif</span>
+            )}
           </div>
 
           {/* Belum Selesai Card */}
-          <div className="glass-card p-5 rounded-2xl shadow-lg border border-white/5 flex flex-col justify-between hover:border-rose-500/30 transition-all duration-300">
+          <div 
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              setSelectedCategory(prev => prev === 'BELUM' ? null : 'BELUM');
+              setSearchQuery('');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                setSelectedCategory(prev => prev === 'BELUM' ? null : 'BELUM');
+                setSearchQuery('');
+              }
+            }}
+            className={`glass-card p-5 rounded-2xl shadow-lg border flex flex-col justify-between hover:border-rose-500/50 hover:scale-[1.01] active:scale-[0.99] transition-all duration-300 cursor-pointer ${
+              selectedCategory === 'BELUM' ? 'ring-2 ring-rose-500 bg-rose-500/10 border-rose-500/40' : 'border-white/5'
+            }`}
+          >
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-rose-400 uppercase tracking-wider">Belum Selesai</span>
               <span className="p-2 rounded-xl bg-rose-500/10 text-rose-400 border border-rose-500/20">
@@ -365,8 +455,101 @@ export default function Dashboard({ records }: DashboardProps) {
                 style={{ width: `${stats.total > 0 ? Math.round((stats.pemberkasanBelumSelesai / stats.total) * 100) : 0}%` }}
               ></div>
             </div>
+            {selectedCategory === 'BELUM' && (
+              <span className="text-[9px] font-bold text-rose-400 uppercase tracking-wider text-right mt-2 block animate-pulse">▼ Tabel Aktif</span>
+            )}
           </div>
         </div>
+
+        {/* Interactive Data Table for Guest view with Search */}
+        {selectedCategory && (
+          <div className="glass-card p-6 rounded-2xl border border-indigo-500/20 shadow-xl space-y-4 animate-fadeIn">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-4">
+              <div>
+                <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+                  <span className={`w-2.5 h-2.5 rounded-full ${
+                    selectedCategory === 'SELESAI' ? 'bg-emerald-500 animate-pulse' :
+                    selectedCategory === 'KONSINYASI' ? 'bg-amber-500 animate-pulse' : 'bg-rose-500 animate-pulse'
+                  }`} />
+                  Tabel Data: {
+                    selectedCategory === 'SELESAI' ? 'BERKAS SELESAI' :
+                    selectedCategory === 'KONSINYASI' ? 'BERKAS KONSINYASI' : 'BELUM SELESAI'
+                  }
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Menampilkan {searchedRecords.length} bidang dari total {filteredRecordsByCategory.length} bidang dalam kategori ini.
+                </p>
+              </div>
+              <button 
+                onClick={() => { setSelectedCategory(null); setSearchQuery(''); }}
+                className="self-end sm:self-center px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-white/10 text-slate-300 hover:text-white rounded-xl transition-colors text-[10px] font-bold flex items-center gap-1.5 cursor-pointer shadow-sm"
+              >
+                <X className="w-3.5 h-3.5" />
+                Tutup Tabel
+              </button>
+            </div>
+
+            {/* Search Input Box */}
+            <div className="relative max-w-md">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
+                <Search className="w-4 h-4 text-slate-500" />
+              </span>
+              <input
+                type="text"
+                placeholder="Ketik nama desa, span, nomor bidang, atau keterangan..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-8 py-2 bg-slate-950 border border-white/10 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans transition-all shadow-inner"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-200 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Village Details Table */}
+            <div className="overflow-x-auto border border-white/5 rounded-xl bg-slate-950/40 shadow-inner">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-900/60 border-b border-white/10 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    <th className="px-4 py-3 font-bold">Desa</th>
+                    <th className="px-4 py-3 font-bold">SPAN</th>
+                    <th className="px-4 py-3 font-bold">No Bidang</th>
+                    <th className="px-4 py-3 font-bold text-right">Luas (m²)</th>
+                    <th className="px-4 py-3 font-bold">Keterangan</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5 text-xs">
+                  {searchedRecords.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-12 text-center text-slate-400 italic font-sans">
+                        Tidak ada data yang cocok dengan kriteria pencarian
+                      </td>
+                    </tr>
+                  ) : (
+                    searchedRecords.map((r, i) => (
+                      <tr key={`${r.ID_UNIK || r.CODE || 'row'}-${i}`} className="hover:bg-white/5 transition-colors duration-150">
+                        <td className="px-4 py-3 font-medium text-slate-200 font-sans whitespace-nowrap">{r.DESA || '-'}</td>
+                        <td className="px-4 py-3 font-mono text-slate-300 font-medium whitespace-nowrap">{r.SPAN || '-'}</td>
+                        <td className="px-4 py-3 font-mono text-slate-300 whitespace-nowrap">{r.NOBID || '-'}</td>
+                        <td className="px-4 py-3 font-mono text-slate-300 text-right whitespace-nowrap">
+                          {parseFloat(r.LUAS) ? parseFloat(r.LUAS).toLocaleString('id-ID') : r.LUAS || '-'}
+                        </td>
+                        <td className="px-4 py-3 text-slate-400 font-sans min-w-[250px] max-w-md whitespace-pre-wrap break-words" title={r.KETERANGAN}>
+                          {r.KETERANGAN || '-'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
       </div>
 
@@ -684,42 +867,44 @@ export default function Dashboard({ records }: DashboardProps) {
       </div>
 
       {/* Document Completion Progress */}
-      <div className="glass-card p-6 rounded-2xl shadow-lg space-y-5">
-        <div className="flex justify-between items-center">
-          <div>
-            <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
-              <FileText className="w-5 h-5 text-slate-400" />
-              Kelengkapan Dokumen Lampiran (Google Drive)
-            </h2>
-            <p className="text-xs text-slate-400 mt-0.5">Persentase berkas digital yang sudah terunggah.</p>
+      {role !== 'GUEST' && (
+        <div className="glass-card p-6 rounded-2xl shadow-lg space-y-5">
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                <FileText className="w-5 h-5 text-slate-400" />
+                Kelengkapan Dokumen Lampiran (Google Drive)
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">Persentase berkas digital yang sudah terunggah.</p>
+            </div>
           </div>
-        </div>
 
-        {records.length === 0 ? (
-          <div className="h-28 flex items-center justify-center border border-dashed border-white/10 rounded-xl text-slate-400 text-sm bg-slate-900/10">
-            Belum ada data berkas yang terunggah
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
-            {documentStats.map((item, idx) => (
-              <div key={idx} className="bg-white/5 p-4 rounded-xl border border-white/5 flex flex-col justify-between shadow-inner">
-                <span className="text-xs font-semibold text-slate-400 tracking-wider uppercase">{item.name}</span>
-                <div className="mt-2 flex items-baseline gap-1.5">
-                  <span className="text-2xl font-extrabold text-white font-sans">{item.Persentase}%</span>
-                  <span className="text-[10px] text-slate-400 font-medium">terisi</span>
+          {records.length === 0 ? (
+            <div className="h-28 flex items-center justify-center border border-dashed border-white/10 rounded-xl text-slate-400 text-sm bg-slate-900/10">
+              Belum ada data berkas yang terunggah
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
+              {documentStats.map((item, idx) => (
+                <div key={idx} className="bg-white/5 p-4 rounded-xl border border-white/5 flex flex-col justify-between shadow-inner">
+                  <span className="text-xs font-semibold text-slate-400 tracking-wider uppercase">{item.name}</span>
+                  <div className="mt-2 flex items-baseline gap-1.5">
+                    <span className="text-2xl font-extrabold text-white font-sans">{item.Persentase}%</span>
+                    <span className="text-[10px] text-slate-400 font-medium">terisi</span>
+                  </div>
+                  {/* Visual bar */}
+                  <div className="w-full h-1.5 bg-slate-800 rounded-full mt-3 overflow-hidden border border-white/5">
+                    <div 
+                      className="h-full bg-indigo-500 rounded-full transition-all duration-500 glow-indigo"
+                      style={{ width: `${item.Persentase}%` }}
+                    ></div>
+                  </div>
                 </div>
-                {/* Visual bar */}
-                <div className="w-full h-1.5 bg-slate-800 rounded-full mt-3 overflow-hidden border border-white/5">
-                  <div 
-                    className="h-full bg-indigo-500 rounded-full transition-all duration-500 glow-indigo"
-                    style={{ width: `${item.Persentase}%` }}
-                  ></div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

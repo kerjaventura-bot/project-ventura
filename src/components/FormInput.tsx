@@ -460,9 +460,9 @@ export default function FormInput({ records, onSave }: FormInputProps) {
 
             {filteredRecords.length > 0 && (
               <div className="bg-slate-900/40 rounded-xl border border-white/10 p-2 divide-y divide-white/5 animate-fadeIn">
-                {filteredRecords.map((rec) => (
+                {filteredRecords.map((rec, idx) => (
                   <button
-                    key={rec.ID_UNIK}
+                    key={`${rec.ID_UNIK || rec.CODE || 'row'}-${idx}`}
                     type="button"
                     onClick={() => handleSelectForEdit(rec)}
                     className="w-full text-left px-4 py-3 hover:bg-indigo-500/10 rounded-lg transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-white cursor-pointer"

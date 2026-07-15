@@ -25,14 +25,59 @@ interface ProjectConfig {
   folderId: string | null;
   spreadsheetId: string | null;
   uploadsFolderId: string | null;
+  publicCsvUrl?: string | null;
 }
 
 const DEFAULT_PROJECTS: ProjectConfig[] = [
-  { id: 'proj-1', name: 'KOMPENSASI ROW 150 kV JELOK - SANGGARAHAN', folderId: null, spreadsheetId: null, uploadsFolderId: null },
-  { id: 'proj-2', name: 'KOMPENSASI ROW 150 kV BANGIL - BULUKANDANG', folderId: null, spreadsheetId: null, uploadsFolderId: null },
-  { id: 'proj-3', name: 'KOMPENSASI ROW 150 kV LAWANG - BULUKANDANG', folderId: null, spreadsheetId: null, uploadsFolderId: null },
-  { id: 'proj-4', name: 'KOMPENSASI ROW 150 kV GRATI - BANGIL', folderId: null, spreadsheetId: null, uploadsFolderId: null },
+  { id: 'proj-1', name: 'KOMPENSASI ROW 150 kV JELOK - SANGGARAHAN', folderId: null, spreadsheetId: null, uploadsFolderId: null, publicCsvUrl: null },
+  { id: 'proj-2', name: 'KOMPENSASI ROW 150 kV BANGIL - BULUKANDANG', folderId: null, spreadsheetId: null, uploadsFolderId: null, publicCsvUrl: null },
+  { id: 'proj-3', name: 'KOMPENSASI ROW 150 kV LAWANG - BULUKANDANG', folderId: null, spreadsheetId: null, uploadsFolderId: null, publicCsvUrl: null },
+  { id: 'proj-4', name: 'KOMPENSASI ROW 150 kV GRATI - BANGIL', folderId: null, spreadsheetId: null, uploadsFolderId: null, publicCsvUrl: null },
 ];
+
+// RFC-compliant CSV Parser
+function parseCSV(text: string): string[][] {
+  const result: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+    
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        cell += '"';
+        i++; // skip next quote
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      row.push(cell);
+      cell = '';
+    } else if ((char === '\r' || char === '\n') && !inQuotes) {
+      if (char === '\r' && nextChar === '\n') {
+        i++; // skip \n
+      }
+      row.push(cell);
+      if (row.length > 1 || row[0] !== '') {
+        result.push(row);
+      }
+      row = [];
+      cell = '';
+    } else {
+      cell += char;
+    }
+  }
+  if (row.length > 0 || cell !== '') {
+    row.push(cell);
+    result.push(row);
+  }
+  return result;
+}
+
+import { rowToRecord } from './types';
 
 export default function App() {
   // Auth state
@@ -131,6 +176,10 @@ export default function App() {
   // Admin specific states
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectSpreadsheetId, setNewProjectSpreadsheetId] = useState('');
+  const [newProjectFolderId, setNewProjectFolderId] = useState('');
+  const [newProjectUploadsFolderId, setNewProjectUploadsFolderId] = useState('');
+  const [newProjectPublicCsvUrl, setNewProjectPublicCsvUrl] = useState('');
   const [showPinSettings, setShowPinSettings] = useState(false);
   const [newAdminPin, setNewAdminPin] = useState('');
   const [newFieldPin, setNewFieldPin] = useState('');
@@ -141,6 +190,7 @@ export default function App() {
   const [editSpreadsheetId, setEditSpreadsheetId] = useState('');
   const [editFolderId, setEditFolderId] = useState('');
   const [editUploadsFolderId, setEditUploadsFolderId] = useState('');
+  const [editPublicCsvUrl, setEditPublicCsvUrl] = useState('');
   
   const [showBackupTools, setShowBackupTools] = useState(false);
   const [backupJsonString, setBackupJsonString] = useState('');
@@ -340,6 +390,44 @@ export default function App() {
         setProjectUploadsFolderId('guest_bypass');
         setSheetNameInfo(activeProj.name);
 
+        // Try to fetch from public CSV URL first if configured
+        if (activeProj.publicCsvUrl) {
+          try {
+            console.log("Fetching public CSV URL:", activeProj.publicCsvUrl);
+            const res = await fetch(activeProj.publicCsvUrl);
+            if (!res.ok) {
+              throw new Error(`HTTP error! status: ${res.status}`);
+            }
+            const csvText = await res.text();
+            const csvRows = parseCSV(csvText);
+            
+            if (csvRows.length > 1) {
+              const dataRows = csvRows.slice(1);
+              const parsedRecords = dataRows
+                .filter(row => row && row.length > 0 && row[0] && row[0] !== 'CODE') // Ensure CODE is present and not header
+                .map((row, idx) => {
+                  const record = rowToRecord(row, idx);
+                  record.rowNumber = idx + 2;
+                  return record;
+                });
+              
+              const sorted = [...parsedRecords].sort(compareLandRecords);
+              setRecords(sorted);
+              
+              // Cache in local storage safely
+              try {
+                localStorage.setItem(`project_ventura_records_cache_${projectId}`, JSON.stringify(sorted));
+              } catch (storageError) {
+                console.warn("localStorage quota exceeded, unable to cache records locally:", storageError);
+              }
+              return; // Success!
+            }
+          } catch (csvErr: any) {
+            console.error("Gagal mengambil data dari tautan Publik CSV, beralih ke cache lokal:", csvErr);
+            // Don't crash, fall back to localStorage cached data or default mocks
+          }
+        }
+
         // Try to load cached records
         const cached = localStorage.getItem(`project_ventura_records_cache_${projectId}`);
         if (cached) {
@@ -392,8 +480,12 @@ export default function App() {
       const items = await fetchSpreadsheetRecords(accessToken, sheetId);
       const sortedItems = [...items].sort(compareLandRecords);
       setRecords(sortedItems);
-      // Cache records in localStorage
-      localStorage.setItem(`project_ventura_records_cache_${projectId}`, JSON.stringify(sortedItems));
+      // Cache records in localStorage safely
+      try {
+        localStorage.setItem(`project_ventura_records_cache_${projectId}`, JSON.stringify(sortedItems));
+      } catch (storageError) {
+        console.warn("localStorage quota exceeded, unable to cache records locally:", storageError);
+      }
       setSheetNameInfo(activeProj.name);
     } catch (err: any) {
       console.error("Sync error:", err);
@@ -645,9 +737,10 @@ export default function App() {
     const newProj: ProjectConfig = {
       id: `proj-${Date.now()}`,
       name: newProjectName.trim().toUpperCase(),
-      folderId: null,
-      spreadsheetId: null,
-      uploadsFolderId: null
+      folderId: newProjectFolderId.trim() || null,
+      spreadsheetId: newProjectSpreadsheetId.trim() || null,
+      uploadsFolderId: newProjectUploadsFolderId.trim() || null,
+      publicCsvUrl: newProjectPublicCsvUrl.trim() || null
     };
 
     const updated = [...projects, newProj];
@@ -658,6 +751,10 @@ export default function App() {
     localStorage.setItem('project_ventura_active_project_id', newProj.id);
     
     setNewProjectName('');
+    setNewProjectSpreadsheetId('');
+    setNewProjectFolderId('');
+    setNewProjectUploadsFolderId('');
+    setNewProjectPublicCsvUrl('');
     setIsAddingProject(false);
   };
 
@@ -701,6 +798,7 @@ export default function App() {
     setEditSpreadsheetId(proj.spreadsheetId || '');
     setEditFolderId(proj.folderId || '');
     setEditUploadsFolderId(proj.uploadsFolderId || '');
+    setEditPublicCsvUrl(proj.publicCsvUrl || '');
   };
 
   // Cancel editing IDs
@@ -709,6 +807,7 @@ export default function App() {
     setEditSpreadsheetId('');
     setEditFolderId('');
     setEditUploadsFolderId('');
+    setEditPublicCsvUrl('');
   };
 
   // Save manual Spreadsheet & Folder IDs
@@ -722,7 +821,8 @@ export default function App() {
           ...p,
           spreadsheetId: editSpreadsheetId.trim() || null,
           folderId: editFolderId.trim() || null,
-          uploadsFolderId: editUploadsFolderId.trim() || null
+          uploadsFolderId: editUploadsFolderId.trim() || null,
+          publicCsvUrl: editPublicCsvUrl.trim() || null
         };
       }
       return p;
@@ -1419,27 +1519,84 @@ export default function App() {
             
             {/* INLINE ADMIN FORM: ADD PROJECT PATH */}
             {role === 'ADMIN' && isAddingProject && (
-              <div className="glass-card p-5 rounded-2xl border border-indigo-500/30 shadow-lg space-y-3 animate-fadeIn" id="admin_add_project_form">
+              <div className="glass-card p-5 rounded-2xl border border-indigo-500/30 shadow-lg space-y-4 animate-fadeIn" id="admin_add_project_form">
                 <div className="flex items-center gap-1.5 text-indigo-300 text-xs font-bold uppercase tracking-wider">
                   <Plus className="w-4 h-4" />
                   Tambah Jalur Kompensasi Baru
                 </div>
                 <p className="text-xs text-slate-400">
-                  Masukkan nama jalur kompensasi ROW baru. Sistem akan otomatis membuat folder penyimpanan utama, folder dokumen terpisah, dan database Google Sheets baru untuk jalur ini di Google Drive Admin.
+                  Masukkan nama jalur baru. Jika Anda membiarkan kolom ID Spreadsheet/Folder kosong, sistem akan otomatis membuatnya di Google Drive Anda (memerlukan masuk akun Google). Atau Anda dapat menempelkan ID yang sudah ada langsung di bawah ini.
                 </p>
-                <form onSubmit={handleAddProject} className="flex flex-col sm:flex-row gap-2 mt-2">
-                  <input
-                    type="text"
-                    required
-                    value={newProjectName}
-                    onChange={(e) => setNewProjectName(e.target.value)}
-                    placeholder="Contoh: KOMPENSASI ROW 150 kV GRATI - BANGIL"
-                    className="flex-1 px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 uppercase font-semibold placeholder:normal-case placeholder:font-normal"
-                  />
-                  <div className="flex gap-2">
+                <form onSubmit={handleAddProject} className="space-y-3 mt-2">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Nama Jalur Kompensasi (Wajib)</label>
+                    <input
+                      type="text"
+                      required
+                      value={newProjectName}
+                      onChange={(e) => setNewProjectName(e.target.value)}
+                      placeholder="Contoh: KOMPENSASI ROW 150 kV GRATI - BANGIL"
+                      className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 uppercase font-semibold placeholder:normal-case placeholder:font-normal"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">ID Google Spreadsheet (Opsional)</label>
+                      <input
+                        type="text"
+                        value={newProjectSpreadsheetId}
+                        onChange={(e) => setNewProjectSpreadsheetId(e.target.value)}
+                        placeholder="ID Spreadsheet (Contoh: 1aBcDe...)"
+                        className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200 font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Tautan Publik CSV Google Sheet (Opsional)</label>
+                      <input
+                        type="text"
+                        value={newProjectPublicCsvUrl}
+                        onChange={(e) => setNewProjectPublicCsvUrl(e.target.value)}
+                        placeholder="Contoh: https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"
+                        className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200 font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">ID Folder Utama Drive (Opsional)</label>
+                      <input
+                        type="text"
+                        value={newProjectFolderId}
+                        onChange={(e) => setNewProjectFolderId(e.target.value)}
+                        placeholder="ID Folder (Contoh: 1XyZ...)"
+                        className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200 font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">ID Folder PDF Bukti (Opsional)</label>
+                      <input
+                        type="text"
+                        value={newProjectUploadsFolderId}
+                        onChange={(e) => setNewProjectUploadsFolderId(e.target.value)}
+                        placeholder="ID Folder PDF (Contoh: 1AbC...)"
+                        className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200 font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2 border-t border-white/5">
                     <button
                       type="button"
-                      onClick={() => setIsAddingProject(false)}
+                      onClick={() => {
+                        setIsAddingProject(false);
+                        setNewProjectName('');
+                        setNewProjectSpreadsheetId('');
+                        setNewProjectFolderId('');
+                        setNewProjectUploadsFolderId('');
+                        setNewProjectPublicCsvUrl('');
+                      }}
                       className="px-4 py-2 bg-slate-900 hover:bg-slate-950 text-slate-300 text-xs font-bold rounded-xl border border-white/10 cursor-pointer"
                     >
                       Batal
@@ -1448,7 +1605,7 @@ export default function App() {
                       type="submit"
                       className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl cursor-pointer shadow-md"
                     >
-                      Simpan & Buat Folder
+                      Simpan & Tambah Jalur
                     </button>
                   </div>
                 </form>
@@ -1485,6 +1642,7 @@ export default function App() {
                          {proj.spreadsheetId && (
                            <div className="text-[9px] font-mono text-slate-500 truncate pt-1 border-t border-white/5 flex flex-col gap-0.5">
                              <span>Sheet ID: <span className="text-slate-400">{proj.spreadsheetId}</span></span>
+                              {proj.publicCsvUrl && <span className="text-emerald-400 font-semibold">Tautan CSV: <span className="text-slate-400">{proj.publicCsvUrl}</span></span>}
                              {proj.folderId && <span>Folder ID: <span className="text-slate-400">{proj.folderId}</span></span>}
                            </div>
                          )}
@@ -1524,6 +1682,17 @@ export default function App() {
                            className="w-full px-2.5 py-1.5 bg-slate-950 border border-white/10 rounded-lg text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
                          />
                          <span className="text-[8px] text-slate-500 leading-none">ID dari URL spreadsheet: https://docs.google.com/spreadsheets/d/<span className="font-bold text-slate-400">SPREADSHEET_ID</span>/edit</span>
+                          <span className="block mt-2.5">
+                            <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Tautan Publik CSV Google Sheet (Untuk Mode Tamu)</label>
+                            <input
+                              type="text"
+                              value={editPublicCsvUrl}
+                              onChange={(e) => setEditPublicCsvUrl(e.target.value)}
+                              placeholder="Contoh: https://docs.google.com/spreadsheets/d/e/2PACX-.../pub?output=csv"
+                              className="w-full px-2.5 py-1.5 bg-slate-950 border border-white/10 rounded-lg text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
+                            />
+                            <span className="text-[8px] text-slate-500 leading-none block mt-1">Cara mendapatkan: Di Google Sheet, klik <strong>File ➔ Bagikan ➔ Publikasikan ke Web</strong>, pilih format <strong>Nilai Terpisah Koma (.csv)</strong>, klik Publikasikan, lalu salin tautannya.</span>
+                          </span>
                        </div>
                        
                        <div className="grid grid-cols-2 gap-2">
@@ -1730,7 +1899,7 @@ export default function App() {
               </div>
             ) : (
               <div className="animate-fadeIn">
-                {activeMenu === 'dashboard' && <Dashboard records={records} />}
+                {activeMenu === 'dashboard' && <Dashboard records={records} role={role} />}
                 
                 {activeMenu === 'input' && role !== 'GUEST' && (
                   <FormInput records={records} onSave={handleSaveRecord} />

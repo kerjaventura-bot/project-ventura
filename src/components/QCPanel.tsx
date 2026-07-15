@@ -317,10 +317,10 @@ export default function QCPanel({ records, adminEmail, onSaveQC }: QCPanelProps)
                   </td>
                 </tr>
               ) : (
-                filteredRecords.map((r) => {
+                filteredRecords.map((r, idx) => {
                   const docCount = [r.LINK_KTP, r.LINK_KK, r.LINK_ALAS_HAK, r.LINK_PERALIHAN_HAK].filter(Boolean).length;
                   return (
-                    <tr key={r.ID_UNIK} className="hover:bg-white/5 transition-colors">
+                    <tr key={`${r.ID_UNIK || r.CODE || 'row'}-${idx}`} className="hover:bg-white/5 transition-colors">
                       <td className="px-6 py-4 font-mono font-bold text-indigo-300">{r.CODE}</td>
                       <td className="px-6 py-4">
                         <p className="font-bold text-white">{r.NAMA}</p>

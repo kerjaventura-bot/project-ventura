@@ -352,7 +352,7 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
               Tidak ada data pertanahan ditemukan
             </div>
           ) : (
-            filteredRecords.map((r) => {
+            filteredRecords.map((r, idx) => {
               const isSelected = r.ID_UNIK === selectedRecordId;
               // Check how many documents have links
               const docCount = [
@@ -365,7 +365,7 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
               
               return (
                 <button
-                  key={r.ID_UNIK}
+                  key={`${r.ID_UNIK || r.CODE || 'row'}-${idx}`}
                   onClick={() => {
                     setSelectedRecordId(r.ID_UNIK);
                     setStatusMessage(null);
