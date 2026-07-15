@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   CheckCircle, XCircle, AlertCircle, FileText, ExternalLink, 
   Search, ShieldCheck, UserCheck, Eye, Calendar, MapPin, 
-  Home, Sprout, Landmark, Save, X, Info, Loader2
+  Home, Sprout, Landmark, Save, X, Info, Loader2, Check
 } from 'lucide-react';
 import { type LandRecord } from '../types';
 
@@ -17,6 +17,46 @@ export default function QCPanel({ records, adminEmail, onSaveQC }: QCPanelProps)
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRecord, setSelectedRecord] = useState<LandRecord | null>(null);
 
+  // Search state for cascading dropdowns
+  const [searchMethod, setSearchMethod] = useState<'dropdown' | 'manual'>('dropdown');
+  const [selectedDesa, setSelectedDesa] = useState('');
+  const [selectedSpan, setSelectedSpan] = useState('');
+  const [selectedNobid, setSelectedNobid] = useState('');
+
+  // Reset child selectors when parent changes
+  useEffect(() => {
+    setSelectedSpan('');
+    setSelectedNobid('');
+  }, [selectedDesa]);
+
+  useEffect(() => {
+    setSelectedNobid('');
+  }, [selectedSpan]);
+
+  // Compute unique values for dropdowns
+  const uniqueDesas = useMemo(() => {
+    const desas = records.map(r => r.DESA?.trim()).filter(Boolean);
+    return Array.from(new Set(desas)).sort();
+  }, [records]);
+
+  const uniqueSpansForDesa = useMemo(() => {
+    if (!selectedDesa) return [];
+    const spans = records
+      .filter(r => r.DESA?.trim() === selectedDesa)
+      .map(r => r.SPAN?.trim())
+      .filter(Boolean);
+    return Array.from(new Set(spans)).sort();
+  }, [records, selectedDesa]);
+
+  const uniqueNobidsForDesaAndSpan = useMemo(() => {
+    if (!selectedDesa || !selectedSpan) return [];
+    const nobids = records
+      .filter(r => r.DESA?.trim() === selectedDesa && r.SPAN?.trim() === selectedSpan)
+      .map(r => r.NOBID?.trim())
+      .filter(Boolean);
+    return Array.from(new Set(nobids)).sort();
+  }, [records, selectedDesa, selectedSpan]);
+
   // QC Form local states for the modal
   const [qcStatus, setQcStatus] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
   const [qcNotes, setQcNotes] = useState('');
@@ -25,17 +65,31 @@ export default function QCPanel({ records, adminEmail, onSaveQC }: QCPanelProps)
   const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   // Filter records
-  const filteredRecords = records.filter(r => {
-    const matchesStatus = filterStatus === 'ALL' 
-      ? true 
-      : (filterStatus === 'PENDING' ? (!r.QC_STATUS || r.QC_STATUS === 'PENDING') : r.QC_STATUS === filterStatus);
-    
-    const matchesSearch = r.CODE.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          r.NAMA.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          r.NIK.includes(searchQuery);
+  const filteredRecords = useMemo(() => {
+    return records.filter(r => {
+      // 1. Check QC Status Filter
+      const matchesStatus = filterStatus === 'ALL' 
+        ? true 
+        : (filterStatus === 'PENDING' ? (!r.QC_STATUS || r.QC_STATUS === 'PENDING') : r.QC_STATUS === filterStatus);
+      
+      if (!matchesStatus) return false;
 
-    return matchesStatus && matchesSearch;
-  });
+      // 2. Check Search Method (Manual vs Dropdown)
+      if (searchMethod === 'manual') {
+        const query = searchQuery.toLowerCase().trim();
+        if (!query) return true;
+        return r.CODE.toLowerCase().includes(query) || 
+               r.NAMA.toLowerCase().includes(query) ||
+               (r.NIK && r.NIK.includes(query));
+      } else {
+        // Dropdown filtering
+        if (selectedDesa && r.DESA?.trim() !== selectedDesa) return false;
+        if (selectedSpan && r.SPAN?.trim() !== selectedSpan) return false;
+        if (selectedNobid && r.NOBID?.trim() !== selectedNobid) return false;
+        return true;
+      }
+    });
+  }, [records, filterStatus, searchMethod, searchQuery, selectedDesa, selectedSpan, selectedNobid]);
 
   // Open inspection details modal
   const handleInspect = (record: LandRecord) => {
@@ -125,22 +179,120 @@ export default function QCPanel({ records, adminEmail, onSaveQC }: QCPanelProps)
       {/* Search and Table Grid */}
       <div className="glass-card rounded-2xl shadow-xl overflow-hidden">
         {/* Search Header */}
-        <div className="p-4 border-b border-white/10 bg-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="relative max-w-xs w-full">
-            <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-              <Search className="w-4 h-4" />
+        <div className="p-5 border-b border-white/10 bg-white/5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            {/* Search Method Toggle */}
+            <div className="flex gap-1.5 bg-slate-950 p-1 rounded-xl border border-white/5 self-start">
+              <button
+                type="button"
+                onClick={() => setSearchMethod('dropdown')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  searchMethod === 'dropdown'
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <MapPin className="w-3.5 h-3.5" />
+                Dropdown Bertingkat
+              </button>
+              <button
+                type="button"
+                onClick={() => setSearchMethod('manual')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  searchMethod === 'manual'
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Search className="w-3.5 h-3.5" />
+                Pencarian Manual
+              </button>
+            </div>
+            
+            <span className="text-xs text-slate-400 font-semibold italic">
+              Menampilkan {filteredRecords.length} dari {records.length} total data
             </span>
-            <input 
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Cari CODE, NAMA, atau NIK..."
-              className="w-full pl-9 pr-3 py-2 bg-slate-900/50 border border-white/10 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 text-white"
-            />
           </div>
-          <span className="text-xs text-slate-400 italic">
-            Menampilkan {filteredRecords.length} dari {records.length} total data
-          </span>
+
+          {searchMethod === 'dropdown' ? (
+            <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 gap-3 items-end animate-fadeIn">
+              {/* Select DESA */}
+              <div className="space-y-1">
+                <span className="text-[10px] font-extrabold text-indigo-300 uppercase tracking-wider block">1. Desa</span>
+                <select
+                  value={selectedDesa}
+                  onChange={(e) => setSelectedDesa(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 cursor-pointer"
+                >
+                  <option value="">-- Pilih Desa --</option>
+                  {uniqueDesas.map(desa => (
+                    <option key={desa} value={desa}>{desa}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Select SPAN */}
+              <div className="space-y-1">
+                <span className="text-[10px] font-extrabold text-indigo-300 uppercase tracking-wider block">2. Span</span>
+                <select
+                  value={selectedSpan}
+                  onChange={(e) => setSelectedSpan(e.target.value)}
+                  disabled={!selectedDesa}
+                  className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <option value="">{selectedDesa ? '-- Pilih Span --' : '-- Pilih Desa Dulu --'}</option>
+                  {uniqueSpansForDesa.map(span => (
+                    <option key={span} value={span}>{span}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Select NOBID */}
+              <div className="space-y-1">
+                <span className="text-[10px] font-extrabold text-indigo-300 uppercase tracking-wider block">3. No. Bidang</span>
+                <select
+                  value={selectedNobid}
+                  onChange={(e) => setSelectedNobid(e.target.value)}
+                  disabled={!selectedSpan}
+                  className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <option value="">{selectedSpan ? '-- Pilih No. Bidang --' : '-- Pilih Span Dulu --'}</option>
+                  {uniqueNobidsForDesaAndSpan.map(nobid => (
+                    <option key={nobid} value={nobid}>{nobid}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Clear filters button */}
+              {(selectedDesa || selectedSpan || selectedNobid) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedDesa('');
+                    setSelectedSpan('');
+                    setSelectedNobid('');
+                  }}
+                  className="h-9 px-4 bg-white/5 hover:bg-rose-500/10 hover:text-rose-300 text-xs font-bold text-slate-400 rounded-xl border border-white/5 transition-all cursor-pointer flex items-center justify-center gap-1"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Reset Filter
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="relative max-w-sm w-full animate-fadeIn">
+              <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                <Search className="w-4 h-4" />
+              </span>
+              <input 
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Cari CODE, NAMA, atau NIK..."
+                className="w-full pl-9 pr-3 py-2.5 bg-slate-900/50 border border-white/10 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 text-white"
+              />
+            </div>
+          )}
         </div>
 
         {/* Desktop Table View */}

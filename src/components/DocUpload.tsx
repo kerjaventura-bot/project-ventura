@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   FileText, Upload, CheckCircle2, AlertCircle, ExternalLink, 
-  Search, Loader2, FolderOpen, Info, ShieldAlert 
+  Search, Loader2, FolderOpen, Info, ShieldAlert, MapPin, Check 
 } from 'lucide-react';
 import { type LandRecord } from '../types';
 import { findOrCreateFolder, uploadFileToDrive } from '../lib/googleApi';
@@ -41,6 +41,46 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   
+  // Search state for cascading dropdowns
+  const [searchMethod, setSearchMethod] = useState<'dropdown' | 'manual'>('dropdown');
+  const [selectedDesa, setSelectedDesa] = useState('');
+  const [selectedSpan, setSelectedSpan] = useState('');
+  const [selectedNobid, setSelectedNobid] = useState('');
+
+  // Reset child selectors when parent changes
+  useEffect(() => {
+    setSelectedSpan('');
+    setSelectedNobid('');
+  }, [selectedDesa]);
+
+  useEffect(() => {
+    setSelectedNobid('');
+  }, [selectedSpan]);
+
+  // Compute unique values for dropdowns
+  const uniqueDesas = useMemo(() => {
+    const desas = records.map(r => r.DESA?.trim()).filter(Boolean);
+    return Array.from(new Set(desas)).sort();
+  }, [records]);
+
+  const uniqueSpansForDesa = useMemo(() => {
+    if (!selectedDesa) return [];
+    const spans = records
+      .filter(r => r.DESA?.trim() === selectedDesa)
+      .map(r => r.SPAN?.trim())
+      .filter(Boolean);
+    return Array.from(new Set(spans)).sort();
+  }, [records, selectedDesa]);
+
+  const uniqueNobidsForDesaAndSpan = useMemo(() => {
+    if (!selectedDesa || !selectedSpan) return [];
+    const nobids = records
+      .filter(r => r.DESA?.trim() === selectedDesa && r.SPAN?.trim() === selectedSpan)
+      .map(r => r.NOBID?.trim())
+      .filter(Boolean);
+    return Array.from(new Set(nobids)).sort();
+  }, [records, selectedDesa, selectedSpan]);
+
   // Loading and error states
   const [uploadingType, setUploadingType] = useState<DocType | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -76,13 +116,28 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
 
   // Filtered list of records to select from
   const filteredRecords = useMemo(() => {
-    const query = searchQuery.toLowerCase().trim();
-    if (!query) return records.slice(0, 10); // show top 10 by default
-    return records.filter(r => 
-      r.CODE.toLowerCase().includes(query) || 
-      r.NAMA.toLowerCase().includes(query)
-    );
-  }, [records, searchQuery]);
+    if (searchMethod === 'manual') {
+      const query = searchQuery.toLowerCase().trim();
+      if (!query) return records;
+      return records.filter(r => 
+        r.CODE.toLowerCase().includes(query) || 
+        r.NAMA.toLowerCase().includes(query)
+      );
+    } else {
+      // Dropdown filtering
+      let list = records;
+      if (selectedDesa) {
+        list = list.filter(r => r.DESA?.trim() === selectedDesa);
+      }
+      if (selectedSpan) {
+        list = list.filter(r => r.SPAN?.trim() === selectedSpan);
+      }
+      if (selectedNobid) {
+        list = list.filter(r => r.NOBID?.trim() === selectedNobid);
+      }
+      return list;
+    }
+  }, [records, searchQuery, searchMethod, selectedDesa, selectedSpan, selectedNobid]);
 
   // Handle PDF/Image file upload
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>, docType: DocType) => {
@@ -183,18 +238,111 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
           <p className="text-xs text-slate-400 mt-0.5">Pilih salah satu kode lahan di bawah untuk melengkapi berkas lampiran.</p>
         </div>
 
-        {/* Search */}
-        <div className="relative mt-4 mb-3">
-          <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-            <Search className="w-4 h-4" />
-          </span>
-          <input 
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cari CODE atau Nama Pemilik..."
-            className="w-full pl-9 pr-3 py-2 bg-slate-900/50 border border-white/10 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 text-white placeholder-slate-400"
-          />
+        {/* Search Method Toggle Tabs */}
+        <div className="flex gap-1.5 border-b border-white/5 pb-2 mt-4">
+          <button
+            type="button"
+            onClick={() => setSearchMethod('dropdown')}
+            className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
+              searchMethod === 'dropdown'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            <MapPin className="w-3.5 h-3.5" />
+            Dropdown
+          </button>
+          <button
+            type="button"
+            onClick={() => setSearchMethod('manual')}
+            className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
+              searchMethod === 'manual'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+            Manual
+          </button>
+        </div>
+
+        {/* Search Input / Cascading Dropdowns */}
+        <div className="space-y-2 mt-3 mb-4">
+          {searchMethod === 'dropdown' ? (
+            <div className="space-y-2.5">
+              {/* Select DESA */}
+              <div>
+                <select
+                  value={selectedDesa}
+                  onChange={(e) => setSelectedDesa(e.target.value)}
+                  className="w-full px-2.5 py-2 bg-slate-900 border border-white/10 rounded-xl text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 cursor-pointer"
+                >
+                  <option value="">-- 1. Pilih Desa --</option>
+                  {uniqueDesas.map(desa => (
+                    <option key={desa} value={desa}>{desa}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Select SPAN */}
+              <div>
+                <select
+                  value={selectedSpan}
+                  onChange={(e) => setSelectedSpan(e.target.value)}
+                  disabled={!selectedDesa}
+                  className="w-full px-2.5 py-2 bg-slate-900 border border-white/10 rounded-xl text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <option value="">{selectedDesa ? '-- 2. Pilih Span --' : '-- 2. Pilih Desa Dulu --'}</option>
+                  {uniqueSpansForDesa.map(span => (
+                    <option key={span} value={span}>{span}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Select NOBID */}
+              <div>
+                <select
+                  value={selectedNobid}
+                  onChange={(e) => setSelectedNobid(e.target.value)}
+                  disabled={!selectedSpan}
+                  className="w-full px-2.5 py-2 bg-slate-900 border border-white/10 rounded-xl text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <option value="">{selectedSpan ? '-- 3. Pilih No. Bidang --' : '-- 3. Pilih Span Dulu --'}</option>
+                  {uniqueNobidsForDesaAndSpan.map(nobid => (
+                    <option key={nobid} value={nobid}>{nobid}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Reset Dropdown Selection if anything chosen */}
+              {(selectedDesa || selectedSpan || selectedNobid) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedDesa('');
+                    setSelectedSpan('');
+                    setSelectedNobid('');
+                  }}
+                  className="w-full py-1 bg-white/5 hover:bg-rose-500/10 hover:text-rose-300 text-[10px] font-bold text-slate-400 rounded-lg border border-white/5 transition-all cursor-pointer"
+                >
+                  Bersihkan Filter Dropdown
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="relative">
+              <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                <Search className="w-4 h-4" />
+              </span>
+              <input 
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Cari CODE atau Nama Pemilik..."
+                className="w-full pl-9 pr-3 py-2.5 bg-slate-900/50 border border-white/10 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 text-white placeholder-slate-400 animate-fadeIn"
+              />
+            </div>
+          )}
         </div>
 
         {/* List scroll */}

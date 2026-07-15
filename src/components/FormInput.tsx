@@ -14,6 +14,56 @@ export default function FormInput({ records, onSave }: FormInputProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEditRecord, setSelectedEditRecord] = useState<LandRecord | null>(null);
   
+  // Search state for cascading dropdowns
+  const [searchMethod, setSearchMethod] = useState<'dropdown' | 'manual'>('dropdown');
+  const [selectedDesa, setSelectedDesa] = useState('');
+  const [selectedSpan, setSelectedSpan] = useState('');
+  const [selectedNobid, setSelectedNobid] = useState('');
+
+  // Reset child selectors when parent changes
+  useEffect(() => {
+    setSelectedSpan('');
+    setSelectedNobid('');
+  }, [selectedDesa]);
+
+  useEffect(() => {
+    setSelectedNobid('');
+  }, [selectedSpan]);
+
+  // Compute unique values for dropdowns
+  const uniqueDesas = useMemo(() => {
+    const desas = records.map(r => r.DESA?.trim()).filter(Boolean);
+    return Array.from(new Set(desas)).sort();
+  }, [records]);
+
+  const uniqueSpansForDesa = useMemo(() => {
+    if (!selectedDesa) return [];
+    const spans = records
+      .filter(r => r.DESA?.trim() === selectedDesa)
+      .map(r => r.SPAN?.trim())
+      .filter(Boolean);
+    return Array.from(new Set(spans)).sort();
+  }, [records, selectedDesa]);
+
+  const uniqueNobidsForDesaAndSpan = useMemo(() => {
+    if (!selectedDesa || !selectedSpan) return [];
+    const nobids = records
+      .filter(r => r.DESA?.trim() === selectedDesa && r.SPAN?.trim() === selectedSpan)
+      .map(r => r.NOBID?.trim())
+      .filter(Boolean);
+    return Array.from(new Set(nobids)).sort();
+  }, [records, selectedDesa, selectedSpan]);
+
+  // Find matched record
+  const matchingRecord = useMemo(() => {
+    if (!selectedDesa || !selectedSpan || !selectedNobid) return null;
+    return records.find(r => 
+      r.DESA?.trim() === selectedDesa && 
+      r.SPAN?.trim() === selectedSpan && 
+      r.NOBID?.trim() === selectedNobid
+    ) || null;
+  }, [records, selectedDesa, selectedSpan, selectedNobid]);
+  
   // Form State
   const [formData, setFormData] = useState<LandRecord>(createEmptyRecord());
   const [activeTab, setActiveTab] = useState<'lahan_pemilik' | 'alas_bangunan' | 'tanaman' | 'administrasi'>('lahan_pemilik');
@@ -256,7 +306,7 @@ export default function FormInput({ records, onSave }: FormInputProps) {
               Edit Data Terdaftar (Search)
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Ketik CODE, NAMA Pemilik, atau NIK untuk memuat data lahan ke formulir edit.
+              Cari data lahan berdasarkan pilihan berjenjang atau ketik nama/CODE secara manual.
             </p>
           </div>
           {selectedEditRecord && (
@@ -271,40 +321,166 @@ export default function FormInput({ records, onSave }: FormInputProps) {
           )}
         </div>
 
-        <div className="relative">
-          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-            <Search className="w-5 h-5" />
-          </div>
-          <input 
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Ketik CODE, NAMA, atau NIK..."
-            className="w-full pl-11 pr-4 py-2.5 bg-slate-900/50 border border-white/10 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500 transition-all text-white placeholder-slate-400"
-          />
+        {/* Search Method Toggle Tabs */}
+        <div className="flex gap-2 border-b border-white/5 pb-2">
+          <button
+            type="button"
+            onClick={() => setSearchMethod('dropdown')}
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              searchMethod === 'dropdown'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            <MapPin className="w-3.5 h-3.5" />
+            Dropdown Bertingkat (Desa &gt; Span &gt; No Bidang)
+          </button>
+          <button
+            type="button"
+            onClick={() => setSearchMethod('manual')}
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              searchMethod === 'manual'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+            Ketik Pencarian Manual
+          </button>
         </div>
 
-        {filteredRecords.length > 0 && (
-          <div className="bg-slate-900/40 rounded-xl border border-white/10 p-2 divide-y divide-white/5 animate-fadeIn">
-            {filteredRecords.map((rec) => (
-              <button
-                key={rec.ID_UNIK}
-                type="button"
-                onClick={() => handleSelectForEdit(rec)}
-                className="w-full text-left px-4 py-3 hover:bg-indigo-500/10 rounded-lg transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-white cursor-pointer"
-              >
-                <div>
-                  <span className="text-xs font-bold font-mono text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-md">
-                    {rec.CODE}
-                  </span>
-                  <span className="ml-3 text-sm font-semibold text-slate-200">{rec.NAMA}</span>
-                  <span className="ml-3 text-xs text-slate-400 font-mono">NIK: {rec.NIK}</span>
+        {searchMethod === 'dropdown' ? (
+          <div className="space-y-4 animate-fadeIn">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Select DESA */}
+              <div>
+                <label className="block text-[10px] font-extrabold text-indigo-300 uppercase tracking-wider mb-1.5">
+                  1. Pilih Desa
+                </label>
+                <select
+                  value={selectedDesa}
+                  onChange={(e) => setSelectedDesa(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 cursor-pointer"
+                >
+                  <option value="">-- Pilih Desa --</option>
+                  {uniqueDesas.map(desa => (
+                    <option key={desa} value={desa}>{desa}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Select SPAN */}
+              <div>
+                <label className="block text-[10px] font-extrabold text-indigo-300 uppercase tracking-wider mb-1.5">
+                  2. Pilih Span
+                </label>
+                <select
+                  value={selectedSpan}
+                  onChange={(e) => setSelectedSpan(e.target.value)}
+                  disabled={!selectedDesa}
+                  className="w-full px-3 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <option value="">{selectedDesa ? '-- Pilih Span --' : '-- Pilih Desa Dulu --'}</option>
+                  {uniqueSpansForDesa.map(span => (
+                    <option key={span} value={span}>{span}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Select NOBID */}
+              <div>
+                <label className="block text-[10px] font-extrabold text-indigo-300 uppercase tracking-wider mb-1.5">
+                  3. Pilih No. Bidang (NOBID)
+                </label>
+                <select
+                  value={selectedNobid}
+                  onChange={(e) => setSelectedNobid(e.target.value)}
+                  disabled={!selectedSpan}
+                  className="w-full px-3 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <option value="">{selectedSpan ? '-- Pilih No. Bidang --' : '-- Pilih Span Dulu --'}</option>
+                  {uniqueNobidsForDesaAndSpan.map(nobid => (
+                    <option key={nobid} value={nobid}>{nobid}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Matched Record Preview box */}
+            {matchingRecord ? (
+              <div className="p-4 bg-indigo-500/10 border border-indigo-500/30 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-fadeIn">
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-bold font-mono text-indigo-300 bg-indigo-500/20 px-2.5 py-0.5 rounded-lg border border-indigo-500/30">
+                      {matchingRecord.CODE}
+                    </span>
+                    <span className="text-sm font-extrabold text-slate-100">{matchingRecord.NAMA}</span>
+                  </div>
+                  <p className="text-xs text-slate-400 font-medium leading-relaxed">
+                    Desa <span className="text-slate-200 font-bold">{matchingRecord.DESA}</span> · Span <span className="text-slate-200 font-bold">{matchingRecord.SPAN}</span> · No. Bidang <span className="text-slate-200 font-bold">{matchingRecord.NOBID}</span> · NIK: <span className="text-slate-200 font-bold font-mono">{matchingRecord.NIK || '-'}</span> · Luas: <span className="text-slate-200 font-bold">{matchingRecord.LUAS} m²</span>
+                  </p>
                 </div>
-                <span className="text-xs text-slate-300 italic shrink-0">
-                  Desa {rec.DESA} · Luas {rec.LUAS} m²
-                </span>
-              </button>
-            ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSelectForEdit(matchingRecord);
+                    // Reset dropdown states so they are clear for next time
+                    setSelectedDesa('');
+                    setSelectedSpan('');
+                    setSelectedNobid('');
+                  }}
+                  className="px-4.5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/10 hover:shadow-indigo-600/20 active:scale-98 transition-all cursor-pointer border border-indigo-400/30 shrink-0"
+                >
+                  <Check className="w-4 h-4 text-emerald-300" />
+                  Muat Data ke Formulir Edit
+                </button>
+              </div>
+            ) : (
+              selectedDesa && selectedSpan && selectedNobid && (
+                <div className="p-3.5 bg-rose-500/10 border border-rose-500/25 rounded-xl text-rose-300 text-xs font-semibold animate-fadeIn">
+                  ⚠️ Data lahan tidak ditemukan dengan kombinasi terpilih. Silakan periksa kembali desa, span, dan nomor bidang Anda.
+                </div>
+              )
+            )}
+          </div>
+        ) : (
+          <div className="space-y-4 animate-fadeIn">
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                <Search className="w-5 h-5" />
+              </div>
+              <input 
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Ketik CODE, NAMA, atau NIK..."
+                className="w-full pl-11 pr-4 py-2.5 bg-slate-900/50 border border-white/10 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500 transition-all text-white placeholder-slate-400"
+              />
+            </div>
+
+            {filteredRecords.length > 0 && (
+              <div className="bg-slate-900/40 rounded-xl border border-white/10 p-2 divide-y divide-white/5 animate-fadeIn">
+                {filteredRecords.map((rec) => (
+                  <button
+                    key={rec.ID_UNIK}
+                    type="button"
+                    onClick={() => handleSelectForEdit(rec)}
+                    className="w-full text-left px-4 py-3 hover:bg-indigo-500/10 rounded-lg transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-white cursor-pointer"
+                  >
+                    <div>
+                      <span className="text-xs font-bold font-mono text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-md">
+                        {rec.CODE}
+                      </span>
+                      <span className="ml-3 text-sm font-semibold text-slate-200">{rec.NAMA}</span>
+                      <span className="ml-3 text-xs text-slate-400 font-mono">NIK: {rec.NIK}</span>
+                    </div>
+                    <span className="text-xs text-slate-300 italic shrink-0">
+                      Desa {rec.DESA} · Luas {rec.LUAS} m²
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -761,9 +937,9 @@ export default function FormInput({ records, onSave }: FormInputProps) {
 
               {/* 8 Buildings */}
               <div className="space-y-4">
-                <div className="border-b border-slate-200 pb-2">
-                  <h3 className="text-sm font-bold text-slate-800 tracking-tight flex items-center gap-1.5">
-                    <Home className="w-4 h-4 text-indigo-600" />
+                <div className="border-b border-white/10 pb-2">
+                  <h3 className="text-sm font-bold text-slate-100 tracking-tight flex items-center gap-1.5">
+                    <Home className="w-4 h-4 text-indigo-400" />
                     Data Bangunan Di Atas Lahan (Maksimal 8 Bangunan)
                   </h3>
                   <p className="text-xs text-slate-400 mt-0.5">Isi rincian bangunan yang berdiri di atas lahan ini.</p>
@@ -773,12 +949,12 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                   {Array.from({ length: activeBuildingsCount }).map((_, i) => {
                     const b = formData.buildings?.[i] || { luas: '', bentuk: '', jenis: '' };
                     return (
-                      <div key={i} className="p-4 rounded-2xl border border-slate-200 bg-slate-50/20 relative space-y-4">
+                      <div key={i} className="p-5 rounded-2xl border border-indigo-500/20 bg-slate-900/60 relative space-y-4 shadow-lg shadow-black/10">
                         {/* Close button to reset */}
                         <button
                           type="button"
                           onClick={() => removeBuildingAt(i)}
-                          className="absolute top-3.5 right-3.5 p-1 text-slate-400 hover:text-rose-500 rounded-md hover:bg-slate-100 transition-colors cursor-pointer"
+                          className="absolute top-3.5 right-3.5 p-1 text-slate-400 hover:text-rose-400 rounded-md hover:bg-white/5 transition-colors cursor-pointer"
                           title="Hapus baris bangunan"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -786,41 +962,41 @@ export default function FormInput({ records, onSave }: FormInputProps) {
 
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
                           <div>
-                            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                            <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1.5 tracking-wide">
                               Bangunan #{i + 1} - JENIS BANGUNAN
                             </label>
                             <input
                               type="text"
                               value={b.jenis}
                               onChange={(e) => handleBuildingChange(i, 'jenis', e.target.value)}
-                              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium text-slate-800"
+                              className="w-full px-3 py-2 bg-slate-950 border border-white/20 rounded-xl text-xs focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 font-semibold text-white placeholder:text-slate-500"
                               placeholder="Contoh: RUMAH / TOKO / GUDANG"
                             />
                           </div>
 
                           <div>
-                            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                            <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1.5 tracking-wide">
                               BENTUK BANGUNAN
                             </label>
                             <input
                               type="text"
                               value={b.bentuk}
                               onChange={(e) => handleBuildingChange(i, 'bentuk', e.target.value)}
-                              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium text-slate-800"
+                              className="w-full px-3 py-2 bg-slate-950 border border-white/20 rounded-xl text-xs focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 font-semibold text-white placeholder:text-slate-500"
                               placeholder="Contoh: PERMANEN / SEMI PERMANEN"
                             />
                           </div>
 
                           <div>
-                            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                            <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1.5 tracking-wide">
                               LUAS BANGUNAN (m²)
                             </label>
                             <input
                               type="text"
                               value={b.luas}
                               onChange={(e) => handleBuildingChange(i, 'luas', e.target.value)}
-                              className={`w-full px-3 py-1.5 border rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium text-slate-800 ${
-                                errors[`building_luas_${i}`] ? 'border-rose-300 bg-rose-50/20' : 'border-slate-200'
+                              className={`w-full px-3 py-2 bg-slate-950 border rounded-xl text-xs focus:outline-none focus:ring-1 font-semibold text-white placeholder:text-slate-500 ${
+                                errors[`building_luas_${i}`] ? 'border-rose-500/40 bg-rose-500/10 focus:border-rose-500 focus:ring-rose-500/30' : 'border-white/20 focus:border-indigo-400 focus:ring-indigo-400/30'
                               }`}
                               placeholder="Contoh: 120"
                             />
@@ -834,7 +1010,7 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                     <button
                       type="button"
                       onClick={() => setActiveBuildingsCount(prev => prev + 1)}
-                      className="w-full py-3 bg-indigo-50 hover:bg-indigo-100/80 text-indigo-700 rounded-xl text-xs font-bold border border-dashed border-indigo-200 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="w-full py-3 bg-indigo-500/10 hover:bg-indigo-500/15 text-indigo-300 rounded-xl text-xs font-extrabold border border-dashed border-indigo-500/30 hover:border-indigo-500/40 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <Plus className="w-4 h-4" />
                       Tambah Kolom Bangunan (Maksimal 8 Bangunan)
@@ -848,7 +1024,7 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                 <button
                   type="button"
                   onClick={() => setActiveTab('lahan_pemilik')}
-                  className="px-5 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold flex items-center gap-2 hover:bg-slate-50 transition-colors"
+                  className="px-5 py-2.5 border border-white/10 text-slate-300 rounded-xl text-sm font-semibold flex items-center gap-2 hover:bg-white/5 hover:text-white transition-all cursor-pointer"
                 >
                   <ArrowLeft className="w-4 h-4" />
                   Sebelumnya
@@ -856,7 +1032,7 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                 <button
                   type="button"
                   onClick={() => setActiveTab('tanaman')}
-                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center gap-2 shadow-xs transition-all"
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center gap-2 shadow-xs transition-all cursor-pointer"
                 >
                   Tab Berikutnya
                   <ArrowRight className="w-4 h-4" />
@@ -868,9 +1044,9 @@ export default function FormInput({ records, onSave }: FormInputProps) {
           {/* Form Content - TAB 3: PLANTS (30 plants slots) */}
           {activeTab === 'tanaman' && (
             <div className="space-y-6 animate-fadeIn">
-              <div className="border-b border-slate-200 pb-2">
-                <h3 className="text-sm font-bold text-slate-800 tracking-tight flex items-center gap-1.5">
-                  <Sprout className="w-4 h-4 text-indigo-600" />
+              <div className="border-b border-white/10 pb-2">
+                <h3 className="text-sm font-bold text-slate-100 tracking-tight flex items-center gap-1.5">
+                  <Sprout className="w-4 h-4 text-emerald-400" />
                   Pohon & Tanaman Produktif Di Atas Lahan (Hingga 30 Jenis)
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">Isi jenis tanaman serta rincian usia produktif dan ukuran tanaman di bawah ini.</p>
@@ -880,12 +1056,12 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                 {Array.from({ length: activePlantsCount }).map((_, i) => {
                   const p = formData.plants?.[i] || { jenis: '', sudah_menghasilkan: '', belum_menghasilkan: '', kecil: '', sedang: '', besar: '' };
                   return (
-                    <div key={i} className="p-4 rounded-2xl border border-slate-200 bg-slate-50/20 relative space-y-4">
+                    <div key={i} className="p-5 rounded-2xl border border-emerald-500/20 bg-slate-900/60 relative space-y-4 shadow-lg shadow-black/10">
                       {/* Close button to reset */}
                       <button
                         type="button"
                         onClick={() => removePlantAt(i)}
-                        className="absolute top-3.5 right-3.5 p-1 text-slate-400 hover:text-rose-500 rounded-md hover:bg-slate-100 transition-colors"
+                        className="absolute top-3.5 right-3.5 p-1 text-slate-400 hover:text-rose-400 rounded-md hover:bg-white/5 transition-colors cursor-pointer"
                         title="Hapus baris tanaman"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -893,41 +1069,41 @@ export default function FormInput({ records, onSave }: FormInputProps) {
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3 pt-2">
                         <div className="sm:col-span-2">
-                          <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                          <label className="block text-[10px] font-bold text-emerald-300 uppercase mb-1.5 tracking-wide">
                             Tanaman #{i + 1} - JENIS TANAMAN
                           </label>
                           <input
                             type="text"
                             value={p.jenis}
                             onChange={(e) => handlePlantChange(i, 'jenis', e.target.value)}
-                            className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium text-slate-800"
+                            className="w-full px-3 py-2 bg-slate-950 border border-white/20 rounded-xl text-xs focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30 font-semibold text-white placeholder:text-slate-500"
                             placeholder="Contoh: KELAPA / ALPUKAT"
                           />
                         </div>
 
                         <div>
-                          <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">SUDAH MENGHASILKAN</label>
+                          <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1.5 tracking-wide">SUDAH MENGHASILKAN</label>
                           <input
                             type="number"
                             min="0"
                             value={p.sudah_menghasilkan}
                             onChange={(e) => handlePlantChange(i, 'sudah_menghasilkan', e.target.value)}
-                            className={`w-full px-3 py-1.5 border rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
-                              errors[`plant_sm_${i}`] ? 'border-rose-300 bg-rose-50/20' : 'border-slate-200'
+                            className={`w-full px-3 py-2 bg-slate-950 border rounded-xl text-xs focus:outline-none focus:ring-1 font-semibold text-white placeholder:text-slate-500 ${
+                              errors[`plant_sm_${i}`] ? 'border-rose-500/40 bg-rose-500/10 focus:border-rose-500 focus:ring-rose-500/30' : 'border-white/20 focus:border-emerald-400 focus:ring-emerald-400/30'
                             }`}
                             placeholder="Pohon"
                           />
                         </div>
 
                         <div>
-                          <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">BELUM MENGHASILKAN</label>
+                          <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1.5 tracking-wide">BELUM MENGHASILKAN</label>
                           <input
                             type="number"
                             min="0"
                             value={p.belum_menghasilkan}
                             onChange={(e) => handlePlantChange(i, 'belum_menghasilkan', e.target.value)}
-                            className={`w-full px-3 py-1.5 border rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
-                              errors[`plant_bm_${i}`] ? 'border-rose-300 bg-rose-50/20' : 'border-slate-200'
+                            className={`w-full px-3 py-2 bg-slate-950 border rounded-xl text-xs focus:outline-none focus:ring-1 font-semibold text-white placeholder:text-slate-500 ${
+                              errors[`plant_bm_${i}`] ? 'border-rose-500/40 bg-rose-500/10 focus:border-rose-500 focus:ring-rose-500/30' : 'border-white/20 focus:border-emerald-400 focus:ring-emerald-400/30'
                             }`}
                             placeholder="Pohon"
                           />
@@ -936,15 +1112,15 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                         <div>
                           <div className="grid grid-cols-3 gap-1">
                             <div className="col-span-3">
-                              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">UKURAN (K / S / B)</label>
+                              <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1.5 tracking-wide">UKURAN (K / S / B)</label>
                             </div>
                             <input
                               type="number"
                               min="0"
                               value={p.kecil}
                               onChange={(e) => handlePlantChange(i, 'kecil', e.target.value)}
-                              className={`w-full px-2 py-1.5 border rounded-lg text-xs text-center focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
-                                errors[`plant_kc_${i}`] ? 'border-rose-300 bg-rose-50/20' : 'border-slate-200'
+                              className={`w-full px-2 py-2 bg-slate-950 border rounded-xl text-xs text-center focus:outline-none focus:ring-1 font-semibold text-white placeholder:text-slate-500 ${
+                                errors[`plant_kc_${i}`] ? 'border-rose-500/40 bg-rose-500/10 focus:border-rose-500 focus:ring-rose-500/30' : 'border-white/20 focus:border-emerald-400 focus:ring-emerald-400/30'
                               }`}
                               placeholder="Kcl"
                               title="Jumlah tanaman ukuran Kecil"
@@ -954,8 +1130,8 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                               min="0"
                               value={p.sedang}
                               onChange={(e) => handlePlantChange(i, 'sedang', e.target.value)}
-                              className={`w-full px-2 py-1.5 border rounded-lg text-xs text-center focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
-                                errors[`plant_sd_${i}`] ? 'border-rose-300 bg-rose-50/20' : 'border-slate-200'
+                              className={`w-full px-2 py-2 bg-slate-950 border rounded-xl text-xs text-center focus:outline-none focus:ring-1 font-semibold text-white placeholder:text-slate-500 ${
+                                errors[`plant_sd_${i}`] ? 'border-rose-500/40 bg-rose-500/10 focus:border-rose-500 focus:ring-rose-500/30' : 'border-white/20 focus:border-emerald-400 focus:ring-emerald-400/30'
                               }`}
                               placeholder="Sdg"
                               title="Jumlah tanaman ukuran Sedang"
@@ -965,8 +1141,8 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                               min="0"
                               value={p.besar}
                               onChange={(e) => handlePlantChange(i, 'besar', e.target.value)}
-                              className={`w-full px-2 py-1.5 border rounded-lg text-xs text-center focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
-                                errors[`plant_bs_${i}`] ? 'border-rose-300 bg-rose-50/20' : 'border-slate-200'
+                              className={`w-full px-2 py-2 bg-slate-950 border rounded-xl text-xs text-center focus:outline-none focus:ring-1 font-semibold text-white placeholder:text-slate-500 ${
+                                errors[`plant_bs_${i}`] ? 'border-rose-500/40 bg-rose-500/10 focus:border-rose-500 focus:ring-rose-500/30' : 'border-white/20 focus:border-emerald-400 focus:ring-emerald-400/30'
                               }`}
                               placeholder="Bsr"
                               title="Jumlah tanaman ukuran Besar"
@@ -982,7 +1158,7 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                   <button
                     type="button"
                     onClick={() => setActivePlantsCount(prev => prev + 1)}
-                    className="w-full py-3 bg-indigo-50 hover:bg-indigo-100/80 text-indigo-700 rounded-xl text-xs font-bold border border-dashed border-indigo-200 transition-colors flex items-center justify-center gap-1.5"
+                    className="w-full py-3 bg-emerald-500/10 hover:bg-emerald-500/15 text-emerald-300 rounded-xl text-xs font-extrabold border border-dashed border-emerald-500/30 hover:border-emerald-500/40 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
                     Tambah Kolom Tanaman (Maksimal 30 Tanaman)
@@ -995,7 +1171,7 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                 <button
                   type="button"
                   onClick={() => setActiveTab('alas_bangunan')}
-                  className="px-5 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold flex items-center gap-2 hover:bg-slate-50 transition-colors"
+                  className="px-5 py-2.5 border border-white/10 text-slate-300 rounded-xl text-sm font-semibold flex items-center gap-2 hover:bg-white/5 hover:text-white transition-all cursor-pointer"
                 >
                   <ArrowLeft className="w-4 h-4" />
                   Sebelumnya
@@ -1003,7 +1179,7 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                 <button
                   type="button"
                   onClick={() => setActiveTab('administrasi')}
-                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center gap-2 shadow-xs transition-all"
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center gap-2 shadow-xs transition-all cursor-pointer"
                 >
                   Tab Berikutnya
                   <ArrowRight className="w-4 h-4" />
