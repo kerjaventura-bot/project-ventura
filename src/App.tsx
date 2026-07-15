@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { 
   googleSignIn, logout, auth, setAccessToken, db
 } from './lib/firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, addDoc } from 'firebase/firestore';
 import { 
   findOrCreateSpreadsheet, fetchSpreadsheetRecords, saveRecordToSpreadsheet, setupProjectDriveStructure, findOrCreateFolder 
 } from './lib/googleApi';
@@ -11,11 +11,12 @@ import Dashboard from './components/Dashboard';
 import FormInput from './components/FormInput';
 import DocUpload from './components/DocUpload';
 import QCPanel from './components/QCPanel';
+import ActivityLogsPanel from './components/ActivityLogsPanel';
 import { 
   Map, Database, UploadCloud, ShieldAlert, LogOut, 
   RefreshCw, FileSpreadsheet, KeyRound, CheckSquare,
   Plus, UserCheck, Settings, Folder, Key, Eye, EyeOff, Lock, Unlock, Info, ShieldCheck, HelpCircle, Briefcase,
-  Pin, Menu
+  Pin, Menu, Clock
 } from 'lucide-react';
 
 interface ProjectConfig {
@@ -35,10 +36,40 @@ const DEFAULT_PROJECTS: ProjectConfig[] = [
 
 export default function App() {
   // Auth state
-  const [user, setUser] = useState<any | null>(null);
-  const [token, setToken] = useState<string | null>(null);
+  const [user, setUser] = useState<any | null>(() => {
+    const isBypass = localStorage.getItem('project_ventura_guest_bypass') === 'true';
+    if (isBypass) {
+      return {
+        uid: 'guest-bypass-user',
+        displayName: 'Tamu Kontraktor',
+        email: 'tamu@projectventura.com',
+        photoURL: '',
+        emailVerified: true,
+      };
+    }
+    return null;
+  });
+  const [token, setToken] = useState<string | null>(() => {
+    const isBypass = localStorage.getItem('project_ventura_guest_bypass') === 'true';
+    return isBypass ? 'GUEST_BYPASS' : null;
+  });
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  // Guest Bypass Login Action
+  const handleGuestBypassLogin = () => {
+    localStorage.setItem('project_ventura_guest_bypass', 'true');
+    setUser({
+      uid: 'guest-bypass-user',
+      displayName: 'Tamu Kontraktor',
+      email: 'tamu@projectventura.com',
+      photoURL: '',
+      emailVerified: true,
+    } as any);
+    setToken('GUEST_BYPASS');
+    setLoginRole('GUEST');
+    loadProjectsFromCloud();
+  };
 
   // Role based access control (RBAC) states
   const [role, setRole] = useState<'ADMIN' | 'FIELD' | 'QC' | 'GUEST' | null>(() => {
@@ -160,6 +191,11 @@ export default function App() {
   // Initialize auth state
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((currentUser) => {
+      const isBypass = localStorage.getItem('project_ventura_guest_bypass') === 'true';
+      if (isBypass) {
+        // If guest bypass is active, ignore Firebase Auth updates
+        return;
+      }
       if (currentUser) {
         setUser(currentUser);
         loadProjectsFromCloud();
@@ -178,6 +214,7 @@ export default function App() {
     setIsLoggingIn(true);
     setAuthError(null);
     try {
+      localStorage.removeItem('project_ventura_guest_bypass');
       const result = await googleSignIn();
       if (result) {
         setUser(result.user);
@@ -195,6 +232,7 @@ export default function App() {
   // Handle Logout action
   const handleLogout = async () => {
     try {
+      localStorage.removeItem('project_ventura_guest_bypass');
       await logout();
       setUser(null);
       setToken(null);
@@ -208,6 +246,87 @@ export default function App() {
     }
   };
 
+  // Helper to create fully typed mock records for guest mode
+  const createMockRecord = (
+    code: string,
+    name: string,
+    desa: string,
+    span: string,
+    nobid: string,
+    luas: string,
+    progres_pemberkasan: string,
+    progres_upload_trabas: string,
+    qc_status: 'PENDING' | 'APPROVED' | 'REJECTED',
+    qc_notes: string
+  ): LandRecord => {
+    const buildings = Array.from({ length: 8 }, () => ({ luas: "", bentuk: "", jenis: "" }));
+    const plants = Array.from({ length: 30 }, () => ({
+      jenis: "", sudah_menghasilkan: "", belum_menghasilkan: "", kecil: "", sedang: "", besar: ""
+    }));
+    return {
+      CODE: code,
+      DESA: desa,
+      SPAN: span,
+      NOBID: nobid,
+      LUAS: luas,
+      PENUTUP_LAHAN: "SAWAH",
+      STATUS_PENUTUP_LAHAN: "TANAH MASYARAKAT",
+      STATUS_KEPEMILIKAN: "PEMILIK DIKETAHUI",
+      NAMA: name,
+      NIK: "320101" + Math.floor(1000000000 + Math.random() * 9000000000),
+      TTL: "Mojokerto, 12-05-1980",
+      JENIS_KELAMIN: "Laki-laki",
+      ALAMAT_KTP_BARIS_1: "RT 02 RW 04",
+      ALAMAT_KTP_BARIS_2: "Dusun Krajan",
+      ALAMAT_KTP_BARIS_3: desa,
+      ALAMAT_KTP_BARIS_4: "Jawa Timur",
+      PEKERJAAN: "Petani",
+      JENIS_ALAS_HAK: "SERTIPIKAT HAK MILIK",
+      NOMER_HAK: "M." + Math.floor(100 + Math.random() * 900),
+      NAMA_ALAS_HAK: name,
+      LUAS_YANG_ADA_PADA_ALAS_HAK: luas,
+      KETERANGAN_ALAS_HAK: "SESUAI",
+      buildings,
+      plants,
+      STATUS_DESA: "Selesai",
+      STATUS_KEPALA: "Lengkap",
+      NAMA_KADES: "H. Mulyono",
+      NAMA_SAKSI_1: "Slamet",
+      NAMA_SAKSI_2: "Kusno",
+      nama_tim_1: "Tim Lapangan A",
+      nama_tim_2: "Tim Lapangan B",
+      TANGGAL_PELAKSANAAN: "2026-07-10",
+      KECAMATAN: "Trowulan",
+      KABUPATEN: "Mojokerto",
+      KONFIRMASI_BPN: "Sudah",
+      PROGRES_PEMBERKASAN: progres_pemberkasan,
+      PROGRES_UPLOAD_TRABAS: progres_upload_trabas,
+      KEKURANGAN_BERKAS: progres_pemberkasan === "Lengkap" ? "" : "Kekurangan berkas Surat Kuasa",
+      KETERANGAN: "",
+      LINK_KTP: "https://drive.google.com/open?id=mock-ktp",
+      LINK_KK: "https://drive.google.com/open?id=mock-kk",
+      LINK_ALAS_HAK: "https://drive.google.com/open?id=mock-alas-hak",
+      LINK_PERALIHAN_HAK: "",
+      QC_STATUS: qc_status,
+      QC_NOTES: qc_notes,
+      QC_BY: "Verifikator Pusat",
+      QC_DATE: "2026-07-12",
+      ID_UNIK: `ID-${code.replace(/[\s-]/g, '_')}`,
+      JENIS_PERALIHAN_HAK: "WARIS",
+      LINK_JUAL_BELI: "",
+      LINK_KETERANGAN_WARIS: "",
+      LINK_KUASA_WARIS: "",
+      LINK_SURAT_KUASA: "",
+      LINK_KET_BEDA_NAMA: "",
+      LINK_WAKAF: "",
+      LINK_KLAIM_TANAMAN: "",
+      LINK_KLAIM_BANGUNAN: "",
+      LINK_DOKUMEN_LAIN: "",
+      LINK_DOKUMENTASI_BIDANG: "",
+      LINK_WAJAH_PEMILIK: ""
+    };
+  };
+
   // Connect and load/create project-specific Google Drive/Spreadsheet
   const loadProjectData = useCallback(async (accessToken: string, projectId: string) => {
     setIsLoadingData(true);
@@ -215,6 +334,33 @@ export default function App() {
     try {
       const activeProj = projects.find(p => p.id === projectId);
       if (!activeProj) throw new Error("Proyek tidak ditemukan.");
+
+      if (accessToken === 'GUEST_BYPASS') {
+        setSpreadsheetId('guest_bypass');
+        setProjectUploadsFolderId('guest_bypass');
+        setSheetNameInfo(activeProj.name);
+
+        // Try to load cached records
+        const cached = localStorage.getItem(`project_ventura_records_cache_${projectId}`);
+        if (cached) {
+          try {
+            setRecords(JSON.parse(cached));
+          } catch (e) {
+            setRecords([]);
+          }
+        } else {
+          // Fallback template records
+          const mockList: LandRecord[] = [
+            createMockRecord("VT-001", "Budi Santoso", "Sukamaju", "SPAN-1", "015", "250", "Lengkap", "Selesai", "APPROVED", "Semua berkas sudah valid"),
+            createMockRecord("VT-002", "Siti Rahmawati", "Sukamaju", "SPAN-1", "016", "410", "Sebagian", "Belum", "PENDING", "Menunggu Surat Kuasa ditandatangani"),
+            createMockRecord("VT-003", "Ahmad Fauzi", "Sukamaju", "SPAN-2", "017", "180", "Belum", "Belum", "PENDING", "Belum ada berkas fisik"),
+            createMockRecord("VT-004", "Dewi Lestari", "Jatisari", "SPAN-3", "005", "320", "Lengkap", "Selesai", "APPROVED", "Validasi BPN sesuai"),
+            createMockRecord("VT-005", "Hendra Wijaya", "Jatisari", "SPAN-3", "006", "550", "Sebagian", "Selesai", "REJECTED", "Nama di sertifikat beda dengan KTP, belum ada Surat Keterangan Beda Nama")
+          ];
+          setRecords(mockList);
+        }
+        return;
+      }
       
       let folderId = activeProj.folderId;
       let sheetId = activeProj.spreadsheetId;
@@ -246,6 +392,8 @@ export default function App() {
       const items = await fetchSpreadsheetRecords(accessToken, sheetId);
       const sortedItems = [...items].sort(compareLandRecords);
       setRecords(sortedItems);
+      // Cache records in localStorage
+      localStorage.setItem(`project_ventura_records_cache_${projectId}`, JSON.stringify(sortedItems));
       setSheetNameInfo(activeProj.name);
     } catch (err: any) {
       console.error("Sync error:", err);
@@ -269,6 +417,30 @@ export default function App() {
     }
   };
 
+  // Helper to log activities in Firestore
+  const logActivity = async (
+    recordCode: string,
+    actionType: 'CREATE' | 'UPDATE' | 'UPLOAD' | 'QC',
+    details: string
+  ) => {
+    try {
+      const activeProj = projects.find(p => p.id === activeProjectId);
+      await addDoc(collection(db, 'activity_logs'), {
+        projectId: activeProjectId,
+        projectName: activeProj?.name || 'Unknown Project',
+        timestamp: Date.now(),
+        userEmail: user?.email || 'unknown',
+        userRole: role || 'GUEST',
+        actionType,
+        recordCode,
+        details
+      });
+      console.log("Aktivitas berhasil direkam:", details);
+    } catch (err) {
+      console.warn("Gagal mencatat log aktivitas di Firestore:", err);
+    }
+  };
+
   // Callback to add/update a record in the sheet
   const handleSaveRecord = async (record: LandRecord, isEdit: boolean) => {
     if (!token || !spreadsheetId) {
@@ -278,16 +450,137 @@ export default function App() {
     // Save/append to spreadsheet
     await saveRecordToSpreadsheet(token, spreadsheetId, record, isEdit, records);
     
+    // Calculate log details
+    let logType: 'CREATE' | 'UPDATE' = isEdit ? 'UPDATE' : 'CREATE';
+    let logDetails = '';
+    
+    if (!isEdit) {
+      logDetails = `Menambahkan data lahan baru dengan CODE: ${record.CODE} (Nama: ${record.NAMA || '-'})`;
+    } else {
+      const originalRecord = records.find(r => r.CODE === record.CODE);
+      if (originalRecord) {
+        const changedFields: string[] = [];
+        const fieldsToCompare = [
+          { label: 'Nama Pemilik', key: 'NAMA' },
+          { label: 'NIK Pemilik', key: 'NIK' },
+          { label: 'Desa', key: 'DESA' },
+          { label: 'Span', key: 'SPAN' },
+          { label: 'No. Bidang', key: 'NOBID' },
+          { label: 'Luas Lahan', key: 'LUAS' },
+          { label: 'Progres Pemberkasan', key: 'PROGRES_PEMBERKASAN' },
+          { label: 'Progres Trabas', key: 'PROGRES_UPLOAD_TRABAS' }
+        ] as const;
+
+        fieldsToCompare.forEach(({ label, key }) => {
+          if (record[key] !== originalRecord[key]) {
+            changedFields.push(`${label} ("${originalRecord[key] || ''}" ➔ "${record[key] || ''}")`);
+          }
+        });
+
+        if (changedFields.length > 0) {
+          logDetails = `Mengubah data lahan CODE: ${record.CODE} pada bagian: ${changedFields.join(', ')}`;
+        } else {
+          logDetails = `Memperbarui data lahan CODE: ${record.CODE}`;
+        }
+      } else {
+        logDetails = `Mengubah data lahan CODE: ${record.CODE}`;
+      }
+    }
+    
     // Refresh local list
     const updatedRecords = await fetchSpreadsheetRecords(token, spreadsheetId);
     const sortedRecords = [...updatedRecords].sort(compareLandRecords);
     setRecords(sortedRecords);
+
+    // Save log asynchronously
+    logActivity(record.CODE, logType, logDetails);
   };
 
   // Callback to update a record (e.g. after adding file links or admin QC)
   const handleUpdateRecord = async (updatedRecord: LandRecord) => {
     if (!token || !spreadsheetId) {
       throw new Error('Koneksi Google Drive terputus. Silakan hubungkan ulang.');
+    }
+
+    const originalRecord = records.find(r => r.CODE === updatedRecord.CODE);
+    let actionType: 'CREATE' | 'UPDATE' | 'UPLOAD' | 'QC' = 'UPDATE';
+    let details = `Mengubah data lahan dengan CODE: ${updatedRecord.CODE}`;
+
+    if (originalRecord) {
+      // Check if QC status changed
+      if (updatedRecord.QC_STATUS !== originalRecord.QC_STATUS) {
+        actionType = 'QC';
+        details = `Melakukan verifikasi QC untuk CODE: ${updatedRecord.CODE} dengan status: ${updatedRecord.QC_STATUS || 'PENDING'}`;
+        if (updatedRecord.QC_NOTES) {
+          details += ` (Catatan: "${updatedRecord.QC_NOTES}")`;
+        }
+      }
+      // Check if file upload links changed
+      else {
+        const fileFields = [
+          { name: 'KTP', field: 'LINK_KTP' },
+          { name: 'Kartu Keluarga', field: 'LINK_KK' },
+          { name: 'Alas Hak', field: 'LINK_ALAS_HAK' },
+          { name: 'Surat Kuasa', field: 'LINK_SURAT_KUASA' },
+          { name: 'Peralihan Hak', field: 'LINK_PERALIHAN_HAK' },
+          { name: 'Keterangan Waris', field: 'LINK_KETERANGAN_WARIS' },
+          { name: 'Kuasa Waris', field: 'LINK_KUASA_WARIS' },
+          { name: 'Klaim Tanaman', field: 'LINK_KLAIM_TANAMAN' },
+          { name: 'Klaim Bangunan', field: 'LINK_KLAIM_BANGUNAN' },
+          { name: 'Beda Nama', field: 'LINK_KET_BEDA_NAMA' },
+          { name: 'Akta Jual Beli', field: 'LINK_JUAL_BELI' },
+          { name: 'Wakaf', field: 'LINK_WAKAF' },
+          { name: 'Lainnya', field: 'LINK_DOKUMEN_LAIN' }
+        ] as const;
+
+        const uploadedFields: string[] = [];
+        const deletedFields: string[] = [];
+
+        fileFields.forEach(({ name, field }) => {
+          if (updatedRecord[field] && !originalRecord[field]) {
+            uploadedFields.push(name);
+          } else if (!updatedRecord[field] && originalRecord[field]) {
+            deletedFields.push(name);
+          }
+        });
+
+        if (uploadedFields.length > 0 || deletedFields.length > 0) {
+          actionType = 'UPLOAD';
+          const parts: string[] = [];
+          if (uploadedFields.length > 0) {
+            parts.push(`Mengunggah berkas ${uploadedFields.join(', ')}`);
+          }
+          if (deletedFields.length > 0) {
+            parts.push(`Menghapus berkas ${deletedFields.join(', ')}`);
+          }
+          details = `${parts.join(' dan ')} untuk CODE: ${updatedRecord.CODE}`;
+        } else {
+          // General field edits
+          const changedFields: string[] = [];
+          const fieldsToCompare = [
+            { label: 'Nama Pemilik', key: 'NAMA' },
+            { label: 'NIK Pemilik', key: 'NIK' },
+            { label: 'Desa', key: 'DESA' },
+            { label: 'Span', key: 'SPAN' },
+            { label: 'No. Bidang', key: 'NOBID' },
+            { label: 'Luas Lahan', key: 'LUAS' },
+            { label: 'Progres Pemberkasan', key: 'PROGRES_PEMBERKASAN' },
+            { label: 'Progres Trabas', key: 'PROGRES_UPLOAD_TRABAS' }
+          ] as const;
+
+          fieldsToCompare.forEach(({ label, key }) => {
+            if (updatedRecord[key] !== originalRecord[key]) {
+              changedFields.push(`${label} ("${originalRecord[key] || ''}" ➔ "${updatedRecord[key] || ''}")`);
+            }
+          });
+
+          if (changedFields.length > 0) {
+            details = `Mengubah data lahan CODE: ${updatedRecord.CODE} pada bagian: ${changedFields.join(', ')}`;
+          } else {
+            details = `Memperbarui data lahan CODE: ${updatedRecord.CODE}`;
+          }
+        }
+      }
     }
 
     // Save full record back to spreadsheet
@@ -297,12 +590,17 @@ export default function App() {
     const refreshed = await fetchSpreadsheetRecords(token, spreadsheetId);
     const sortedRefreshed = [...refreshed].sort(compareLandRecords);
     setRecords(sortedRefreshed);
+
+    // Save log asynchronously
+    logActivity(updatedRecord.CODE, actionType, details);
   };
 
   // Handle Role Verification
   const handleVerifyRole = (e: React.FormEvent) => {
     e.preventDefault();
     setPinError(null);
+
+    const isBypass = localStorage.getItem('project_ventura_guest_bypass') === 'true';
 
     if (loginRole === 'GUEST') {
       // Guest doesn't need strict PIN or can use tamu123
@@ -314,6 +612,11 @@ export default function App() {
       localStorage.setItem('project_ventura_role', 'GUEST');
       setActiveMenu('dashboard');
       setPinInput('');
+      return;
+    }
+
+    if (isBypass) {
+      setPinError(`Peran ${loginRole} memerlukan akses penuh Google Drive & Google Sheets. Silakan kembali ke halaman utama dan hubungkan akun Google Anda.`);
       return;
     }
 
@@ -561,19 +864,28 @@ export default function App() {
               {/* Sync Button */}
               {token ? (
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleManualSync}
-                    disabled={isLoadingData}
-                    className="p-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg border border-white/10 hover:border-white/20 transition-all inline-flex items-center gap-1.5 text-[11px] font-bold cursor-pointer"
-                    title="Sinkronisasi Ulang Data Google Sheets"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
-                    Sync
-                  </button>
-                  <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-md flex items-center gap-1 font-mono">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                    Online
-                  </span>
+                  {token !== 'GUEST_BYPASS' && (
+                    <button
+                      onClick={handleManualSync}
+                      disabled={isLoadingData}
+                      className="p-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg border border-white/10 hover:border-white/20 transition-all inline-flex items-center gap-1.5 text-[11px] font-bold cursor-pointer"
+                      title="Sinkronisasi Ulang Data Google Sheets"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
+                      Sync
+                    </button>
+                  )}
+                  {token === 'GUEST_BYPASS' ? (
+                    <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-md flex items-center gap-1 font-mono" title="Menggunakan data lokal ter-cache (Offline-ready)">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                      Mode Tamu (Cache)
+                    </span>
+                  ) : (
+                    <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-md flex items-center gap-1 font-mono">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      Online
+                    </span>
+                  )}
                 </div>
               ) : (
                 <button
@@ -659,7 +971,7 @@ export default function App() {
             <button 
               onClick={handleLogin}
               disabled={isLoggingIn}
-              className="w-full flex items-center justify-center gap-3 bg-white/10 border border-white/15 hover:bg-white/15 hover:border-white/25 rounded-xl px-5 py-3 text-sm font-semibold text-white transition-all cursor-pointer shadow-lg hover:shadow-indigo-500/5"
+              className="w-full flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 border border-indigo-500/30 rounded-xl px-5 py-3 text-sm font-semibold text-white transition-all cursor-pointer shadow-lg hover:shadow-indigo-500/20"
             >
               <div className="flex items-center justify-center gap-3">
                 <div className="shrink-0">
@@ -677,6 +989,21 @@ export default function App() {
               </div>
             </button>
 
+            <div className="flex items-center justify-center gap-2 text-slate-500">
+              <span className="h-px bg-white/10 flex-1"></span>
+              <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-500">ATAU</span>
+              <span className="h-px bg-white/10 flex-1"></span>
+            </div>
+
+            <button 
+              type="button"
+              onClick={handleGuestBypassLogin}
+              className="w-full flex items-center justify-center gap-2.5 bg-slate-900 border border-white/10 hover:bg-slate-950 rounded-xl px-5 py-3 text-xs font-bold text-slate-300 hover:text-white transition-all cursor-pointer shadow-md"
+            >
+              <UserCheck className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span>MASUK SEBAGAI TAMU (TANPA AKUN GOOGLE)</span>
+            </button>
+
             <div className="border-t border-white/5 pt-6 text-left space-y-3.5 text-xs text-slate-400">
               <p className="font-semibold text-slate-300 text-center mb-1 text-[11px] uppercase tracking-wide">Persyaratan Akses Sistem</p>
               <div className="flex gap-2.5">
@@ -686,6 +1013,10 @@ export default function App() {
               <div className="flex gap-2.5">
                 <div className="text-indigo-400 shrink-0 font-bold">2.</div>
                 <p><strong>Staf Lapangan / QC / Tamu:</strong> Masuk menggunakan tautan Google yang sama atau yang telah diberi izin akses ke Google Drive Folder proyek oleh Admin.</p>
+              </div>
+              <div className="flex gap-2.5">
+                <div className="text-indigo-400 shrink-0 font-bold">3.</div>
+                <p><strong>Mode Tamu (Bypass Google):</strong> Akses cepat tanpa login Google. Menggunakan data lokal ter-cache dari sinkronisasi terakhir untuk melihat visualisasi, peta progres, & filter data (Read-Only).</p>
               </div>
             </div>
           </div>
@@ -1001,6 +1332,24 @@ export default function App() {
               >
                 <CheckSquare className="w-4 h-4 shrink-0" />
                 4. Verifikasi & QC
+              </button>
+            )}
+
+            {/* Menu 5. Log Aktivitas - Admin only */}
+            {role === 'ADMIN' && (
+              <button
+                onClick={() => {
+                  setActiveMenu('logs');
+                  if (!isSidebarPinned) setIsSidebarHovered(false);
+                }}
+                className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold transition-all flex items-center gap-2.5 cursor-pointer ${
+                  activeMenu === 'logs' 
+                    ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 shadow-inner' 
+                    : 'text-slate-400 hover:bg-white/5 hover:text-white border border-transparent'
+                }`}
+              >
+                <Clock className="w-4 h-4 shrink-0" />
+                5. Log Aktivitas
               </button>
             )}
 
@@ -1398,6 +1747,10 @@ export default function App() {
                 
                 {activeMenu === 'qc' && (role === 'ADMIN' || role === 'QC') && (
                   <QCPanel records={records} adminEmail={user?.email || 'Admin'} onSaveQC={handleUpdateRecord} />
+                )}
+                
+                {activeMenu === 'logs' && role === 'ADMIN' && (
+                  <ActivityLogsPanel activeProjectId={activeProjectId} projects={projects} />
                 )}
               </div>
             )}
