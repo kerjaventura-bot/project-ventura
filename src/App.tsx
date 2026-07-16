@@ -238,6 +238,11 @@ export default function App() {
     }
   }, []);
 
+  // Initialize auth state and load projects from cloud on mount
+  useEffect(() => {
+    loadProjectsFromCloud();
+  }, [loadProjectsFromCloud]);
+
   // Initialize auth state
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((currentUser) => {
