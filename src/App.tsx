@@ -12,11 +12,12 @@ import FormInput from './components/FormInput';
 import DocUpload from './components/DocUpload';
 import QCPanel from './components/QCPanel';
 import ActivityLogsPanel from './components/ActivityLogsPanel';
+import InteractiveMap from './components/InteractiveMap';
 import { 
   Map, Database, UploadCloud, ShieldAlert, LogOut, 
   RefreshCw, FileSpreadsheet, KeyRound, CheckSquare,
   Plus, UserCheck, Settings, Folder, Key, Eye, EyeOff, Lock, Unlock, Info, ShieldCheck, HelpCircle, Briefcase,
-  Pin, Menu, Clock
+  Pin, Menu, Clock, LayoutGrid
 } from 'lucide-react';
 
 interface ProjectConfig {
@@ -159,7 +160,7 @@ export default function App() {
   const [records, setRecords] = useState<LandRecord[]>([]);
   const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
   const [projectUploadsFolderId, setProjectUploadsFolderId] = useState<string | null>(null);
-  const [activeMenu, setActiveMenu] = useState<'dashboard' | 'input' | 'upload' | 'qc'>('dashboard');
+  const [activeMenu, setActiveMenu] = useState<'dashboard' | 'input' | 'upload' | 'qc' | 'map'>('dashboard');
   
   // Sidebar state
   const [isSidebarPinned, setIsSidebarPinned] = useState<boolean>(() => {
@@ -1428,8 +1429,24 @@ export default function App() {
                   : 'text-slate-400 hover:bg-white/5 hover:text-white border border-transparent'
               }`}
             >
-              <Map className="w-4 h-4 shrink-0" />
+              <LayoutGrid className="w-4 h-4 shrink-0" />
               1. Dashboard Utama
+            </button>
+
+            {/* Menu 1.2. Peta Spasial (GIS) - All roles can see */}
+            <button
+              onClick={() => {
+                setActiveMenu('map');
+                if (!isSidebarPinned) setIsSidebarHovered(false);
+              }}
+              className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold transition-all flex items-center gap-2.5 cursor-pointer ${
+                activeMenu === 'map' 
+                  ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 shadow-inner' 
+                  : 'text-slate-400 hover:bg-white/5 hover:text-white border border-transparent'
+              }`}
+            >
+              <Map className="w-4 h-4 shrink-0" />
+              1.2. Peta Spasial (GIS)
             </button>
 
             {/* Menu 2. Input & Edit Lahan - Locked for Guests */}
@@ -1951,6 +1968,15 @@ export default function App() {
             ) : (
               <div className="animate-fadeIn">
                 {activeMenu === 'dashboard' && <Dashboard records={records} role={role} />}
+                
+                {activeMenu === 'map' && (
+                  <InteractiveMap 
+                    records={records} 
+                    role={role} 
+                    activeProjectName={projects.find(p => p.id === activeProjectId)?.name}
+                    activeProjectId={activeProjectId}
+                  />
+                )}
                 
                 {activeMenu === 'input' && role !== 'GUEST' && (
                   <FormInput records={records} onSave={handleSaveRecord} />
