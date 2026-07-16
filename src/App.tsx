@@ -1967,7 +1967,13 @@ export default function App() {
               </div>
             ) : (
               <div className="animate-fadeIn">
-                {activeMenu === 'dashboard' && <Dashboard records={records} role={role} />}
+                {activeMenu === 'dashboard' && (
+                  <Dashboard 
+                    records={records} 
+                    role={role} 
+                    activeProjectName={projects.find(p => p.id === activeProjectId)?.name} 
+                  />
+                )}
                 
                 {activeMenu === 'map' && (
                   <InteractiveMap 

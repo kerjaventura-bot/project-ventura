@@ -5,16 +5,18 @@ import {
 } from 'recharts';
 import { 
   TrendingUp, FileText, CheckCircle2, Clock, AlertCircle, Map, Home, Sprout,
-  ShieldCheck, FolderCheck, CloudUpload, MapPin, Search, X
+  ShieldCheck, FolderCheck, CloudUpload, MapPin, Search, X, FileDown
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
 import type { LandRecord } from '../types';
 
 interface DashboardProps {
   records: LandRecord[];
   role?: string | null;
+  activeProjectName?: string;
 }
 
-export default function Dashboard({ records, role }: DashboardProps) {
+export default function Dashboard({ records, role, activeProjectName }: DashboardProps) {
   // Statistics and Calculations
   const stats = useMemo(() => {
     const total = records.length;
@@ -228,6 +230,426 @@ export default function Dashboard({ records, role }: DashboardProps) {
     ];
   }, [records, stats]);
 
+  const handleExportPDF = () => {
+    try {
+      const doc = new jsPDF('p', 'mm', 'a4');
+      
+      // Set metadata
+      doc.setProperties({
+        title: `Laporan Progres - ${activeProjectName || 'Project Ventura'}`,
+        subject: 'Progres Pembebasan Lahan & Pemberkasan',
+        author: 'Project Ventura GIS System',
+      });
+
+      const primaryColor = [79, 70, 229]; // Indigo hex #4f46e5
+      const darkSlate = [15, 23, 42]; // Slate-900 hex #0f172a
+      const textGray = [71, 85, 105]; // Slate-600 hex #475569
+      const lightGray = [241, 245, 249]; // Slate-100 hex #f1f5f9
+      const borderGray = [226, 232, 240]; // Slate-200 hex #e2e8f0
+
+      // Timestamp & Metadata (Footer & Headers)
+      const today = new Date();
+      const formattedDate = today.toLocaleDateString('id-ID', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }) + ' WIB';
+
+      // Keep track of current page
+      let pageNum = 1;
+
+      // Clean footer drawing function
+      const drawFooter = (docInstance: typeof doc, pNum: number) => {
+        docInstance.setFont('helvetica', 'italic');
+        docInstance.setFontSize(7.5);
+        docInstance.setTextColor(148, 163, 184); // slate-400
+        
+        // Draw a clean divider line near the bottom
+        docInstance.setDrawColor(226, 232, 240); // slate-200
+        docInstance.setLineWidth(0.15);
+        docInstance.line(15, 280, 195, 280);
+        
+        docInstance.text(`Sistem Informasi Terintegrasi - Project Ventura GIS`, 15, 285);
+        docInstance.text(`Dicetak pada: ${formattedDate}   |   Halaman ${pNum}`, 190, 285, { align: 'right' });
+      };
+
+      // Draw initial footer for page 1
+      drawFooter(doc, pageNum);
+
+      // Header Banner
+      doc.setFillColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+      doc.rect(15, 15, 180, 28, 'F');
+
+      // Title in Header
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      doc.setTextColor(255, 255, 255);
+      doc.text('LAPORAN PROGRES PERTANAHAN & PEMBEBASAN', 20, 24);
+
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(251, 191, 36); // amber-400 for contrast
+      doc.text(`JALUR PROYEK: ${activeProjectName ? activeProjectName.toUpperCase() : 'SEMUA JALUR'}`, 20, 31);
+
+      let y = 52;
+
+      // --- SECTION 1: RINGKASAN UTAMA ---
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+      doc.text('1. RINGKASAN CAPAIAN PROYEK', 15, y);
+      
+      // Draw decorative indicator
+      doc.setDrawColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.setLineWidth(0.8);
+      doc.line(15, y + 2, 60, y + 2);
+      
+      y += 8;
+
+      // KPI Box 1: Total Bidang Lahan
+      doc.setFillColor(lightGray[0], lightGray[1], lightGray[2]);
+      doc.rect(15, y, 42, 18, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+      doc.text(String(stats.total), 36, y + 8, { align: 'center' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(textGray[0], textGray[1], textGray[2]);
+      doc.text('TOTAL BIDANG', 36, y + 14, { align: 'center' });
+
+      // KPI Box 2: Total Luas Lahan
+      doc.setFillColor(lightGray[0], lightGray[1], lightGray[2]);
+      doc.rect(60, y, 42, 18, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+      doc.text(`${stats.totalLuas.toLocaleString('id-ID')} m²`, 81, y + 8, { align: 'center' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(textGray[0], textGray[1], textGray[2]);
+      doc.text('TOTAL LUAS', 81, y + 14, { align: 'center' });
+
+      // KPI Box 3: Total Bangunan
+      doc.setFillColor(lightGray[0], lightGray[1], lightGray[2]);
+      doc.rect(105, y, 42, 18, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+      doc.text(`${stats.totalBuildings} Unit`, 126, y + 8, { align: 'center' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(textGray[0], textGray[1], textGray[2]);
+      doc.text('BANGUNAN TERDATA', 126, y + 14, { align: 'center' });
+
+      // KPI Box 4: Total Tanaman
+      doc.setFillColor(lightGray[0], lightGray[1], lightGray[2]);
+      doc.rect(150, y, 45, 18, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+      doc.text(`${stats.totalPlantsCount} Pohon`, 172, y + 8, { align: 'center' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(textGray[0], textGray[1], textGray[2]);
+      doc.text('POHON & TANAMAN', 172, y + 14, { align: 'center' });
+
+      y += 24;
+
+      // --- NEW: GRAPHICAL GRAND TOTAL PROGRESS BAR ---
+      const grandSelesaiPct = stats.total > 0 ? Math.round((stats.pemberkasanSelesai / stats.total) * 100) : 0;
+      const grandKonsinyasiPct = stats.total > 0 ? Math.round((stats.pemberkasanKonsinyasi / stats.total) * 100) : 0;
+      const grandBelumPct = stats.total > 0 ? Math.round((stats.pemberkasanBelumSelesai / stats.total) * 100) : 0;
+
+      doc.setFillColor(248, 250, 252); // slate-50 background card
+      doc.rect(15, y, 180, 22, 'F');
+      doc.setDrawColor(226, 232, 240); // border
+      doc.setLineWidth(0.2);
+      doc.rect(15, y, 180, 22, 'D');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(71, 85, 105); // slate-600
+      doc.text('AKUMULASI PROGRES PEMBERKASAN JALUR AKTIF:', 20, y + 5);
+
+      const grandBarX = 20;
+      const grandBarY = y + 7.5;
+      const grandBarW = 170;
+      const grandBarH = 5;
+
+      const grandSWidth = (grandSelesaiPct / 100) * grandBarW;
+      const grandKWidth = (grandKonsinyasiPct / 100) * grandBarW;
+      const grandBWidth = (grandBelumPct / 100) * grandBarW;
+
+      let currentGrandX = grandBarX;
+      // Selesai (Emerald)
+      if (grandSWidth > 0) {
+        doc.setFillColor(16, 185, 129); 
+        doc.rect(currentGrandX, grandBarY, grandSWidth, grandBarH, 'F');
+        currentGrandX += grandSWidth;
+      }
+      // Konsinyasi (Amber)
+      if (grandKWidth > 0) {
+        doc.setFillColor(245, 158, 11); 
+        doc.rect(currentGrandX, grandBarY, grandKWidth, grandBarH, 'F');
+        currentGrandX += grandKWidth;
+      }
+      // Belum Selesai (Rose)
+      if (grandBWidth > 0) {
+        doc.setFillColor(244, 63, 94); 
+        doc.rect(currentGrandX, grandBarY, grandBWidth, grandBarH, 'F');
+      }
+
+      // Legend & Counts
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(16, 185, 129);
+      doc.text(`Selesai Berkas: ${stats.pemberkasanSelesai} Bidang (${grandSelesaiPct}%)`, 20, y + 17);
+
+      doc.setTextColor(245, 158, 11);
+      doc.text(`Konsinyasi: ${stats.pemberkasanKonsinyasi} Bidang (${grandKonsinyasiPct}%)`, 80, y + 17);
+
+      doc.setTextColor(244, 63, 94);
+      doc.text(`Belum Selesai: ${stats.pemberkasanBelumSelesai} Bidang (${grandBelumPct}%)`, 140, y + 17);
+
+      y += 28;
+
+      // --- SECTION 2: DETAIL PROGRES ADMINISTRASI & TRABAS ---
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+      doc.text('2. PROGRES PEMBERKASAN & INTEGRASI TRABAS', 15, y);
+      doc.line(15, y + 2, 90, y + 2);
+
+      y += 8;
+
+      // Let's draw sub-categories with percentages
+      const selesaiPct = stats.total > 0 ? Math.round((stats.pemberkasanSelesai / stats.total) * 100) : 0;
+      const konsinyasiPct = stats.total > 0 ? Math.round((stats.pemberkasanKonsinyasi / stats.total) * 100) : 0;
+      const belumPct = stats.total > 0 ? Math.round((stats.pemberkasanBelumSelesai / stats.total) * 100) : 0;
+      const trabasPct = stats.total > 0 ? Math.round((stats.trabasSudah / stats.total) * 100) : 0;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      
+      // Column left: Pemberkasan
+      doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+      doc.setFont('helvetica', 'bold');
+      doc.text('A. Pemberkasan Lapangan:', 15, y);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`• Berkas Selesai:  ${stats.pemberkasanSelesai} Bidang (${selesaiPct}%)`, 20, y + 5);
+      doc.text(`• Berkas Konsinyasi:  ${stats.pemberkasanKonsinyasi} Bidang (${konsinyasiPct}%)`, 20, y + 10);
+      doc.text(`• Belum Diproses:  ${stats.pemberkasanBelumSelesai} Bidang (${belumPct}%)`, 20, y + 15);
+
+      // Column right: TRABAS
+      doc.setFont('helvetica', 'bold');
+      doc.text('B. Integrasi Portal TRABAS:', 110, y);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`• Sudah Upload:  ${stats.trabasSudah} Bidang (${trabasPct}%)`, 115, y + 5);
+      doc.text(`• Belum Upload:  ${stats.trabasBelum} Bidang (${100 - trabasPct}%)`, 115, y + 10);
+
+      y += 24;
+
+      // --- SECTION 3: PROGRESS KOMPARASI PER DESA ---
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+      doc.text('3. CAPAIAN PROGRES PER WILAYAH DESA (GRAFIK KOMPARASI)', 15, y);
+      doc.line(15, y + 2, 80, y + 2);
+
+      y += 8;
+
+      // Table Header for Graphical Representation
+      doc.setFillColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+      doc.rect(15, y, 180, 8, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(255, 255, 255);
+      doc.text('No', 18, y + 5.5);
+      doc.text('Wilayah Desa & Total Bidang', 25, y + 5.5);
+      doc.text('Grafik Progres (Pemberkasan & TRABAS)', 67, y + 5.5);
+      doc.text('Rincian Angka (S/K/B & Sd/Bl)', 127, y + 5.5);
+      doc.text('Persentase', 172, y + 5.5);
+
+      y += 8;
+
+      // Table Rows
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      
+      desaProgressData.forEach((desa, index) => {
+        // Each custom graphical row needs 14mm of height
+        const rowHeight = 14;
+
+        // Check for page break
+        if (y + rowHeight > 270) {
+          doc.addPage();
+          pageNum++;
+          drawFooter(doc, pageNum);
+          y = 20;
+          
+          // Re-draw Table Header on new page
+          doc.setFillColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+          doc.rect(15, y, 180, 8, 'F');
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8);
+          doc.setTextColor(255, 255, 255);
+          doc.text('No', 18, y + 5.5);
+          doc.text('Wilayah Desa & Total Bidang', 25, y + 5.5);
+          doc.text('Grafik Progres (Pemberkasan & TRABAS)', 67, y + 5.5);
+          doc.text('Rincian Angka (S/K/B & Sd/Bl)', 127, y + 5.5);
+          doc.text('Persentase', 172, y + 5.5);
+          y += 8;
+        }
+
+        // Zebra striping
+        if (index % 2 === 0) {
+          doc.setFillColor(248, 250, 252); // slate-50
+        } else {
+          doc.setFillColor(255, 255, 255);
+        }
+        doc.rect(15, y, 180, rowHeight, 'F');
+
+        // Draw left purple indicator line to give premium dashboard look
+        doc.setFillColor(79, 70, 229);
+        doc.rect(15, y, 1.2, rowHeight, 'F');
+
+        // Thin bottom border
+        doc.setDrawColor(borderGray[0], borderGray[1], borderGray[2]);
+        doc.setLineWidth(0.15);
+        doc.line(15, y + rowHeight, 195, y + rowHeight);
+
+        // Column 1: No
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
+        doc.setTextColor(15, 23, 42); // slate-900
+        doc.text(String(index + 1), 18, y + 5.5);
+
+        // Column 2: Nama Desa
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.setTextColor(15, 23, 42); // slate-900
+        doc.text(desa.name, 25, y + 5.5);
+
+        // Total Bidang subtext
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(100, 116, 139); // slate-500
+        doc.text(`(${desa.total} Bidang)`, 25, y + 10);
+
+        // --- GRAPH 1: PEMBERKASAN ---
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(71, 85, 105); // slate-600
+        doc.text('Pemberkasan:', 67, y + 5);
+
+        const barX = 85;
+        const barWidth = 38; // 38mm fits perfectly without any overlap
+        const barHeight = 2.5;
+
+        const sWidth = desa.total > 0 ? (desa.selesai / desa.total) * barWidth : 0;
+        const kWidth = desa.total > 0 ? (desa.konsinyasi / desa.total) * barWidth : 0;
+        const bWidth = desa.total > 0 ? (desa.belum / desa.total) * barWidth : 0;
+
+        let currentX = barX;
+        // Selesai (Green)
+        if (sWidth > 0) {
+          doc.setFillColor(16, 185, 129); // emerald-500
+          doc.rect(currentX, y + 2.8, sWidth, barHeight, 'F');
+          currentX += sWidth;
+        }
+        // Konsinyasi (Amber)
+        if (kWidth > 0) {
+          doc.setFillColor(245, 158, 11); // amber-500
+          doc.rect(currentX, y + 2.8, kWidth, barHeight, 'F');
+          currentX += kWidth;
+        }
+        // Belum (Rose)
+        if (bWidth > 0) {
+          doc.setFillColor(244, 63, 94); // rose-500
+          doc.rect(currentX, y + 2.8, bWidth, barHeight, 'F');
+        }
+
+        // Border around bar
+        doc.setDrawColor(203, 213, 225); // slate-300
+        doc.setLineWidth(0.1);
+        doc.rect(barX, y + 2.8, barWidth, barHeight, 'D');
+
+        // --- GRAPH 2: TRABAS ---
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(71, 85, 105); // slate-600
+        doc.text('Upload TRABAS:', 67, y + 10);
+
+        const trabasSudahWidth = desa.total > 0 ? (desa.trabasSudah / desa.total) * barWidth : 0;
+        const trabasBelumWidth = desa.total > 0 ? (desa.trabasBelum / desa.total) * barWidth : 0;
+
+        // Sudah (Blue)
+        doc.setFillColor(59, 130, 246); // blue-500
+        doc.rect(barX, y + 7.8, trabasSudahWidth, barHeight, 'F');
+
+        // Belum (Gray)
+        doc.setFillColor(203, 213, 225); // slate-300
+        doc.rect(barX + trabasSudahWidth, y + 7.8, trabasBelumWidth, barHeight, 'F');
+
+        // Border around TRABAS bar
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.1);
+        doc.rect(barX, y + 7.8, barWidth, barHeight, 'D');
+
+        // --- Column 3: Rincian Angka ---
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(15, 23, 42); // slate-900
+        doc.text(`S:${desa.selesai} | K:${desa.konsinyasi} | B:${desa.belum}`, 127, y + 5);
+
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139); // slate-500
+        doc.text(`Sd:${desa.trabasSudah} | Bl:${desa.trabasBelum}`, 127, y + 10);
+
+        // --- Column 4: Percentages & Summary ---
+        const selesaiPctDesa = desa.total > 0 ? Math.round((desa.selesai / desa.total) * 100) : 0;
+        const trabasPctDesa = desa.total > 0 ? Math.round((desa.trabasSudah / desa.total) * 100) : 0;
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(16, 185, 129); // emerald-500
+        doc.text(`Berkas: ${selesaiPctDesa}%`, 172, y + 5);
+        
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(59, 130, 246); // blue-500
+        doc.text(`TRABAS: ${trabasPctDesa}%`, 172, y + 10);
+
+        y += rowHeight;
+      });
+
+      y += 10;
+
+      // Sign off note
+      if (y > 270) {
+        doc.addPage();
+        pageNum++;
+        drawFooter(doc, pageNum);
+        y = 20;
+      }
+      
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(8);
+      doc.setTextColor(textGray[0], textGray[1], textGray[2]);
+      doc.text('* Laporan ini dihasilkan secara otomatis oleh Project Ventura GIS & Land Management System.', 15, y);
+      doc.text('* Untuk konfirmasi atau pembaruan berkas, silakan hubungi tim Verifikasi QC atau Administrator.', 15, y + 4.5);
+
+      // Save/Download PDF
+      const cleanFileName = (activeProjectName || 'Project_Ventura').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+      doc.save(`Laporan_Progres_${cleanFileName}_${today.toISOString().split('T')[0]}.pdf`);
+    } catch (err) {
+      console.error("Gagal mengekspor PDF:", err);
+      alert("Terjadi kesalahan saat menghasilkan PDF. Silakan coba lagi.");
+    }
+  };
+
   return (
     <div className="space-y-8" id="sip_dashboard">
       {/* Upper Welcome and Header */}
@@ -240,7 +662,15 @@ export default function Dashboard({ records, role }: DashboardProps) {
               : 'Pantau progres berkas pertanahan, luas bidang tanah, bangunan, tanaman, dan hasil verifikasi QC.'}
           </p>
         </div>
-        <div className="flex items-center gap-3 self-start md:self-center">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 self-start md:self-center">
+          <button
+            onClick={handleExportPDF}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold rounded-xl transition-all shadow-md shadow-indigo-600/10 cursor-pointer"
+            title="Ekspor Ringkasan Dashboard ke PDF untuk WhatsApp"
+          >
+            <FileDown className="w-4 h-4" />
+            EKSPOR LAPORAN PDF
+          </button>
           <span className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 text-emerald-300 text-xs font-semibold rounded-full border border-emerald-500/20 shadow-inner">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
             Terhubung Google Sheets
