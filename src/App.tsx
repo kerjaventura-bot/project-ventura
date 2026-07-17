@@ -17,7 +17,7 @@ import {
   Map, Database, UploadCloud, ShieldAlert, LogOut, 
   RefreshCw, FileSpreadsheet, KeyRound, CheckSquare,
   Plus, UserCheck, Settings, Folder, Key, Eye, EyeOff, Lock, Unlock, Info, ShieldCheck, HelpCircle, Briefcase,
-  Pin, Menu, Clock, LayoutGrid
+  Pin, Menu, Clock, LayoutGrid, Sun, Moon
 } from 'lucide-react';
 
 interface ProjectConfig {
@@ -81,6 +81,21 @@ function parseCSV(text: string): string[][] {
 import { rowToRecord } from './types';
 
 export default function App() {
+  // Theme state
+  const [isLightMode, setIsLightMode] = useState<boolean>(() => {
+    return localStorage.getItem('theme') === 'light';
+  });
+
+  useEffect(() => {
+    if (isLightMode) {
+      document.documentElement.classList.add('light');
+      localStorage.setItem('theme', 'light');
+    } else {
+      document.documentElement.classList.remove('light');
+      localStorage.setItem('theme', 'dark');
+    }
+  }, [isLightMode]);
+
   // Auth state
   const [user, setUser] = useState<any | null>(() => {
     const isBypass = localStorage.getItem('project_ventura_guest_bypass') === 'true';
@@ -979,9 +994,9 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative overflow-x-hidden" id="sip_root_app">
       {/* Dynamic Background Blur Blobs */}
-      <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-indigo-600 rounded-full blur-[130px] opacity-15 pointer-events-none z-0"></div>
-      <div className="absolute bottom-[-10%] right-[-10%] w-[600px] h-[600px] bg-emerald-600 rounded-full blur-[150px] opacity-15 pointer-events-none z-0"></div>
-      <div className="absolute top-[40%] right-[10%] w-[350px] h-[350px] bg-purple-600 rounded-full blur-[120px] opacity-10 pointer-events-none z-0"></div>
+      <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-indigo-600 bg-blob-indigo rounded-full blur-[130px] opacity-15 pointer-events-none z-0"></div>
+      <div className="absolute bottom-[-10%] right-[-10%] w-[600px] h-[600px] bg-emerald-600 bg-blob-emerald rounded-full blur-[150px] opacity-15 pointer-events-none z-0"></div>
+      <div className="absolute top-[40%] right-[10%] w-[350px] h-[350px] bg-purple-600 bg-blob-purple rounded-full blur-[120px] opacity-10 pointer-events-none z-0"></div>
 
       {/* 1. TOP BAR NAVBAR */}
       <header className="glass-card border-t-0 border-x-0 sticky top-0 z-40 px-6 py-4 flex flex-col md:flex-row justify-between items-center gap-4 shadow-xl">
@@ -1001,95 +1016,117 @@ export default function App() {
         </div>
 
         {/* Project Display Banner and Profile Area */}
-        {user && role && (
-          <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto self-stretch md:self-auto justify-end z-10">
-            {/* Locked Project Display Banner */}
-            <div className="flex items-center gap-2.5 bg-indigo-500/10 border border-indigo-500/20 px-3 py-1.5 rounded-xl w-full sm:w-auto sm:max-w-[320px] lg:max-w-[420px] truncate shadow-inner">
-              <Briefcase className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-              <span className="text-[9px] font-extrabold text-indigo-300 uppercase tracking-wider shrink-0">Jalur:</span>
-              <span className="text-xs font-extrabold text-white truncate font-sans" title={projects.find(p => p.id === activeProjectId)?.name}>
-                {projects.find(p => p.id === activeProjectId)?.name || 'MEMUAT...'}
-              </span>
-            </div>
+        <div className="flex flex-col md:flex-row items-center gap-3 w-full md:w-auto self-stretch md:self-auto justify-end z-10">
+          {/* Day/Night Toggle Button */}
+          <button
+            onClick={() => setIsLightMode(prev => !prev)}
+            className="p-2 bg-white/5 hover:bg-white/10 text-slate-300 rounded-xl border border-white/10 hover:border-white/20 transition-all cursor-pointer flex items-center justify-center gap-2 text-xs font-bold shrink-0 self-stretch md:self-auto"
+            title={isLightMode ? 'Aktifkan Mode Malam' : 'Aktifkan Mode Terang'}
+            id="theme_toggle_btn"
+          >
+            {isLightMode ? (
+              <>
+                <Moon className="w-4 h-4 text-amber-500 shrink-0" />
+                <span className="md:hidden lg:inline">Mode Malam</span>
+              </>
+            ) : (
+              <>
+                <Sun className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="md:hidden lg:inline">Mode Siang</span>
+              </>
+            )}
+          </button>
 
-            <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
-              {/* Sync Button */}
-              {token ? (
-                <div className="flex items-center gap-2">
-                  {token !== 'GUEST_BYPASS' && (
-                    <button
-                      onClick={handleManualSync}
-                      disabled={isLoadingData}
-                      className="p-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg border border-white/10 hover:border-white/20 transition-all inline-flex items-center gap-1.5 text-[11px] font-bold cursor-pointer"
-                      title="Sinkronisasi Ulang Data Google Sheets"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
-                      Sync
-                    </button>
-                  )}
-                  {token === 'GUEST_BYPASS' ? (
-                    <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-md flex items-center gap-1 font-mono" title="Menggunakan data lokal ter-cache (Offline-ready)">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
-                      Mode Tamu (Cache)
-                    </span>
-                  ) : (
-                    <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-md flex items-center gap-1 font-mono">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                      Online
-                    </span>
-                  )}
-                </div>
-              ) : (
-                <button
-                  onClick={handleLogin}
-                  className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-[10px] font-bold rounded-xl border border-amber-500/20 flex items-center gap-1 transition-all cursor-pointer shrink-0"
-                  title="Hubungkan Google Drive Admin"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  Hubungkan Drive
-                </button>
-              )}
-
-              {/* Role Badge and Switch */}
-              <div className="flex items-center gap-2 pl-2.5 border-l border-white/10 shrink-0">
-                <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border uppercase tracking-wider ${
-                  role === 'ADMIN' ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30' :
-                  role === 'FIELD' ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' :
-                  role === 'QC' ? 'bg-amber-500/15 text-amber-300 border-amber-500/30' :
-                  'bg-slate-500/15 text-slate-300 border-slate-500/30'
-                }`} title={`Peran saat ini: ${role}`}>
-                  {role === 'ADMIN' ? 'Admin' : role === 'FIELD' ? 'Lapangan' : role === 'QC' ? 'QC' : 'Tamu'}
+          {user && role && (
+            <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto self-stretch md:self-auto justify-end">
+              {/* Locked Project Display Banner */}
+              <div className="flex items-center gap-2.5 bg-indigo-500/10 border border-indigo-500/20 px-3 py-1.5 rounded-xl w-full sm:w-auto sm:max-w-[320px] lg:max-w-[420px] truncate shadow-inner">
+                <Briefcase className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span className="text-[9px] font-extrabold text-indigo-300 uppercase tracking-wider shrink-0">Jalur:</span>
+                <span className="text-xs font-extrabold text-white truncate font-sans" title={projects.find(p => p.id === activeProjectId)?.name}>
+                  {projects.find(p => p.id === activeProjectId)?.name || 'MEMUAT...'}
                 </span>
-
-                <button
-                  onClick={handleSwitchRole}
-                  className="p-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg border border-white/10 hover:border-white/20 transition-all text-[10px] font-bold cursor-pointer shrink-0"
-                  title="Ganti Jalur Proyek atau Hak Akses / Peran"
-                >
-                  Ganti Jalur/Peran
-                </button>
               </div>
 
-              {/* Profile Image & Logout */}
-              <div className="flex items-center gap-2 pl-2.5 border-l border-white/10 shrink-0">
-                {user.photoURL ? (
-                  <img src={user.photoURL} alt={user.displayName} referrerPolicy="no-referrer" className="w-7 h-7 rounded-full border border-white/10" />
-                ) : (
-                  <div className="w-7 h-7 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center justify-center font-bold text-xs shrink-0">
-                    {user.displayName?.charAt(0) || user.email?.charAt(0) || 'U'}
+              <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+                {/* Sync Button */}
+                {token ? (
+                  <div className="flex items-center gap-2">
+                    {token !== 'GUEST_BYPASS' && (
+                      <button
+                        onClick={handleManualSync}
+                        disabled={isLoadingData}
+                        className="p-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg border border-white/10 hover:border-white/20 transition-all inline-flex items-center gap-1.5 text-[11px] font-bold cursor-pointer"
+                        title="Sinkronisasi Ulang Data Google Sheets"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
+                        Sync
+                      </button>
+                    )}
+                    {token === 'GUEST_BYPASS' ? (
+                      <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-md flex items-center gap-1 font-mono" title="Menggunakan data lokal ter-cache (Offline-ready)">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                        Mode Tamu (Cache)
+                      </span>
+                    ) : (
+                      <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-md flex items-center gap-1 font-mono">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        Online
+                      </span>
+                    )}
                   </div>
+                ) : (
+                  <button
+                    onClick={handleLogin}
+                    className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-[10px] font-bold rounded-xl border border-amber-500/20 flex items-center gap-1 transition-all cursor-pointer shrink-0"
+                    title="Hubungkan Google Drive Admin"
+                  >
+                    <KeyRound className="w-3.5 h-3.5" />
+                    Hubungkan Drive
+                  </button>
                 )}
-                <button
-                  onClick={handleLogout}
-                  className="p-1.5 hover:bg-rose-500/15 text-rose-400 hover:text-rose-300 rounded-lg transition-colors cursor-pointer"
-                  title="Keluar Google Account"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                </button>
+
+                {/* Role Badge and Switch */}
+                <div className="flex items-center gap-2 pl-2.5 border-l border-white/10 shrink-0">
+                  <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border uppercase tracking-wider ${
+                    role === 'ADMIN' ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30' :
+                    role === 'FIELD' ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' :
+                    role === 'QC' ? 'bg-amber-500/15 text-amber-300 border-amber-500/30' :
+                    'bg-slate-500/15 text-slate-300 border-slate-500/30'
+                  }`} title={`Peran saat ini: ${role}`}>
+                    {role === 'ADMIN' ? 'Admin' : role === 'FIELD' ? 'Lapangan' : role === 'QC' ? 'QC' : 'Tamu'}
+                  </span>
+
+                  <button
+                    onClick={handleSwitchRole}
+                    className="p-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg border border-white/10 hover:border-white/20 transition-all text-[10px] font-bold cursor-pointer shrink-0"
+                    title="Ganti Jalur Proyek atau Hak Akses / Peran"
+                  >
+                    Ganti Jalur/Peran
+                  </button>
+                </div>
+
+                {/* Profile Image & Logout */}
+                <div className="flex items-center gap-2 pl-2.5 border-l border-white/10 shrink-0">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt={user.displayName} referrerPolicy="no-referrer" className="w-7 h-7 rounded-full border border-white/10" />
+                  ) : (
+                    <div className="w-7 h-7 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center justify-center font-bold text-xs shrink-0">
+                      {user.displayName?.charAt(0) || user.email?.charAt(0) || 'U'}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleLogout}
+                    className="p-1.5 hover:bg-rose-500/15 text-rose-400 hover:text-rose-300 rounded-lg transition-colors cursor-pointer"
+                    title="Keluar Google Account"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </header>
 
       {/* 2. AUTHENTICATION & PORTAL LOGINS GATE */}

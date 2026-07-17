@@ -81,6 +81,213 @@ body {
   overflow-x: hidden;
 }
 
+/* Daylight / Light Theme Overrides */
+.light {
+  color-scheme: light;
+}
+
+.light body, .light #sip_root_app {
+  background-color: #f8fafc !important; /* slate-50 */
+  color: #1e293b !important; /* slate-800 */
+}
+
+/* Light theme background blobs */
+.light .bg-blob-indigo {
+  background-color: #818cf8 !important; /* softer indigo */
+  opacity: 0.1 !important;
+}
+.light .bg-blob-emerald {
+  background-color: #34d399 !important; /* softer emerald */
+  opacity: 0.1 !important;
+}
+.light .bg-blob-purple {
+  background-color: #c084fc !important; /* softer purple */
+  opacity: 0.08 !important;
+}
+
+/* Light theme typography */
+.light h1, .light h2, .light h3, .light h4, .light h5, .light h6, 
+.light .text-slate-100, .light .text-slate-200 {
+  color: #0f172a !important; /* slate-900 */
+}
+
+/* Maintain bright white text on solid colored backgrounds and buttons in light mode */
+.light .bg-indigo-600,
+.light .bg-indigo-500,
+.light .bg-emerald-600,
+.light .bg-rose-600,
+.light .bg-amber-500,
+.light .bg-amber-600,
+.light .bg-indigo-600 .text-white,
+.light .bg-indigo-500 .text-white,
+.light .bg-emerald-600 .text-white,
+.light .bg-rose-600 .text-white,
+.light .bg-amber-500 .text-white,
+.light .bg-amber-600 .text-white,
+.light button.bg-indigo-600,
+.light button.bg-indigo-500,
+.light button.bg-emerald-600,
+.light button.bg-rose-600,
+.light button.bg-amber-500,
+.light button.bg-amber-600 {
+  color: #ffffff !important;
+}
+
+.light .text-white {
+  color: #0f172a; /* fall back to slate-900 on typical light backgrounds */
+}
+
+.light .text-slate-300, .light .text-slate-400 {
+  color: #475569 !important; /* slate-600 */
+}
+
+.light .text-slate-500 {
+  color: #64748b !important; /* slate-500 */
+}
+
+/* Glass Card light theme */
+.light .glass-card {
+  background-color: rgba(255, 255, 255, 0.8) !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.04), 0 8px 10px -6px rgba(0, 0, 0, 0.04) !important;
+}
+
+.light .glass-card-subtle {
+  background-color: rgba(255, 255, 255, 0.4) !important;
+  border-color: rgba(0, 0, 0, 0.04) !important;
+}
+
+.light .glass-card-dark {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  border-color: rgba(0, 0, 0, 0.1) !important;
+  color: #0f172a !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Form and Inputs light theme */
+.light .glass-input {
+  background-color: #ffffff !important;
+  border-color: rgba(0, 0, 0, 0.12) !important;
+  color: #0f172a !important;
+}
+
+.light .glass-input::placeholder {
+  color: #94a3b8 !important;
+}
+
+.light .glass-input:focus {
+  border-color: #4f46e5 !important; /* indigo-600 */
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15) !important;
+}
+
+/* Background Overrides */
+.light .bg-slate-950, .light .bg-slate-900, .light .bg-slate-900\/60, .light .bg-slate-900\/40, .light .bg-slate-950\/40 {
+  background-color: #ffffff !important;
+}
+
+.light .bg-white\/2\.5 {
+  background-color: rgba(0, 0, 0, 0.015) !important;
+}
+
+.light .bg-white\/5 {
+  background-color: rgba(0, 0, 0, 0.03) !important;
+}
+
+.light .bg-white\/10 {
+  background-color: rgba(0, 0, 0, 0.05) !important;
+}
+
+.light .hover\:bg-white\/10:hover {
+  background-color: rgba(0, 0, 0, 0.06) !important;
+}
+
+.light .border-white\/10, .light .border-white\/5, .light .border-white\/20 {
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+.light .divide-white\/10 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+/* Accent overlays */
+.light .text-indigo-300 {
+  color: #4f46e5 !important; /* indigo-600 */
+}
+
+.light .text-indigo-400 {
+  color: #4338ca !important; /* indigo-700 */
+}
+
+.light .bg-indigo-500\/10 {
+  background-color: rgba(79, 70, 229, 0.06) !important;
+}
+
+.light .bg-indigo-500\/15 {
+  background-color: rgba(79, 70, 229, 0.1) !important;
+}
+
+.light .border-indigo-500\/20, .light .border-indigo-500\/30 {
+  border-color: rgba(79, 70, 229, 0.15) !important;
+}
+
+.light .bg-indigo-600\/35 {
+  background-color: rgba(79, 70, 229, 0.12) !important;
+}
+
+/* Scrollbar override */
+.light .scrollbar-thin::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.01);
+}
+
+.light .scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.light .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.22);
+}
+
+/* Map specific overrides */
+.light .leaflet-container {
+  background-color: #f1f5f9 !important;
+}
+
+.light .custom-map-tooltip {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  border-color: rgba(0, 0, 0, 0.12) !important;
+  color: #1e293b !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+}
+
+.light .custom-map-tooltip-dark {
+  background-color: rgba(255, 255, 255, 0.98) !important;
+  border-color: rgba(79, 70, 229, 0.4) !important;
+  color: #1e293b !important;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.1) !important;
+}
+
+/* Recharts override for light mode */
+.light .recharts-default-tooltip {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+}
+
+.light .recharts-tooltip-label {
+  color: #0f172a !important;
+}
+
+/* Modals backdrop & card overrides */
+.light .bg-slate-900\/90, .light .bg-slate-900\/80 {
+  background-color: rgba(255, 255, 255, 0.8) !important;
+}
+
+.light .bg-slate-950\/30 {
+  background-color: rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Recharts override for dark tooltips */
+
 /* Recharts override for dark tooltips */
 .recharts-default-tooltip {
   background-color: rgba(15, 23, 42, 0.9) !important;
