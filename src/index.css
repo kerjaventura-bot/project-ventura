@@ -118,19 +118,28 @@ body {
 .light .bg-rose-600,
 .light .bg-amber-500,
 .light .bg-amber-600,
+.light button.bg-indigo-600,
+.light button.bg-indigo-500,
+.light button.bg-emerald-600,
+.light button.bg-rose-600,
+.light button.bg-amber-500,
+.light button.bg-amber-600,
+.light .bg-indigo-600.text-white,
+.light .bg-indigo-500.text-white,
+.light .bg-emerald-600.text-white,
+.light .bg-rose-600.text-white,
+.light .bg-amber-500.text-white,
+.light .bg-amber-600.text-white,
 .light .bg-indigo-600 .text-white,
 .light .bg-indigo-500 .text-white,
 .light .bg-emerald-600 .text-white,
 .light .bg-rose-600 .text-white,
 .light .bg-amber-500 .text-white,
 .light .bg-amber-600 .text-white,
-.light button.bg-indigo-600,
-.light button.bg-indigo-500,
-.light button.bg-emerald-600,
-.light button.bg-rose-600,
-.light button.bg-amber-500,
-.light button.bg-amber-600 {
+.light .text-white-keep,
+.light .text-white-keep * {
   color: #ffffff !important;
+  opacity: 1 !important;
 }
 
 .light .text-white {

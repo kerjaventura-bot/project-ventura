@@ -171,8 +171,12 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
       const mainFolderId = uploadsFolderId || await findOrCreateFolder(accessToken, "SIP_Berkas_Pertanahan_Desa");
       
       // 2. Find or create subfolder matching record with unique id prefix (e.g. ID-8F9G2H_KUTA-12-4)
-      const subFolderName = selectedRecord.CODE.replace(/[\/\\?%*:|"<>\s]/g, '-');
-      const subFolderId = await findOrCreateFolder(accessToken, subFolderName, mainFolderId, selectedRecord.ID_UNIK);
+      // Check if there is already a locked Google Drive Folder ID
+      let subFolderId = selectedRecord.DRIVE_FOLDER_ID;
+      if (!subFolderId) {
+        const subFolderName = selectedRecord.CODE.replace(/[\/\\?%*:|"<>\s]/g, '-');
+        subFolderId = await findOrCreateFolder(accessToken, subFolderName, mainFolderId, selectedRecord.ID_UNIK);
+      }
       
       // 3. Upload file to Google Drive subfolder, with proper naming
       // For Peralihan_Hak, let's include the sub-type in the file name prefix
@@ -190,6 +194,7 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
 
       // 4. Update corresponding link field inside record
       const updatedRecord = { ...selectedRecord };
+      updatedRecord.DRIVE_FOLDER_ID = subFolderId; // save and lock Drive Folder ID!
       if (docType === 'KTP') updatedRecord.LINK_KTP = uploadResult.webViewLink;
       else if (docType === 'KK') updatedRecord.LINK_KK = uploadResult.webViewLink;
       else if (docType === 'Alas_Hak') updatedRecord.LINK_ALAS_HAK = uploadResult.webViewLink;
@@ -410,6 +415,18 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
                     Desa {selectedRecord.DESA} · NIK {selectedRecord.NIK} · Alas Hak: {selectedRecord.JENIS_ALAS_HAK} ({selectedRecord.NOMER_HAK || 'Tanpa Nomor'})
                   </p>
                 </div>
+                {selectedRecord.DRIVE_FOLDER_ID && (
+                  <a
+                    href={`https://drive.google.com/drive/folders/${selectedRecord.DRIVE_FOLDER_ID}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-600/10 hover:shadow-indigo-600/20 active:scale-98 transition-all cursor-pointer border border-indigo-400/30 shrink-0 self-start sm:self-center"
+                  >
+                    <FolderOpen className="w-4 h-4 text-emerald-300" />
+                    Buka Folder Drive
+                    <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+                  </a>
+                )}
               </div>
 
               {/* Status Banner */}
@@ -428,10 +445,26 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
               <div className="p-3.5 bg-white/5 rounded-xl border border-white/5 text-[11px] text-slate-300 flex items-start gap-2.5 shadow-inner">
                 <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
                 <div className="space-y-1">
-                  <span className="font-bold text-white">Integrasi Otomatis Google Drive</span>
-                  <p className="text-slate-400">
-                    Sistem menggunakan <strong className="text-indigo-200">Kode Unik ({selectedRecord.ID_UNIK})</strong> yang tersambung dengan Google Drive secara permanen. 
-                    Meskipun Anda mengubah nomor bidang (NOBID) atau nama desa, folder dan berkas Anda di Google Drive akan tetap sinkron secara otomatis! Folder tersimpan dengan nama <strong className="text-indigo-200">{selectedRecord.ID_UNIK}_{selectedRecord.CODE}</strong>.
+                  <span className="font-bold text-white flex items-center gap-1.5">
+                    Integrasi Otomatis & Kunci Folder Google Drive
+                    {selectedRecord.DRIVE_FOLDER_ID && (
+                      <span className="text-[9px] font-extrabold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 uppercase tracking-wider">
+                        🔒 Kunci Folder Aktif
+                      </span>
+                    )}
+                  </span>
+                  <p className="text-slate-400 leading-relaxed">
+                    {selectedRecord.DRIVE_FOLDER_ID ? (
+                      <>
+                        Folder bidang ini telah **dikunci secara permanen** dengan Google Drive Folder ID: <code className="text-indigo-200 bg-indigo-950/40 px-1.5 py-0.5 rounded font-mono text-[10px] select-all">{selectedRecord.DRIVE_FOLDER_ID}</code>. 
+                        Meskipun Anda mengedit nomor bidang (NOBID), memindahkan baris, atau menyisipkan baris baru di antara bidang lainnya, dokumen di dalam folder ini tidak akan pernah tertukar atau salah tampil!
+                      </>
+                    ) : (
+                      <>
+                        Sistem menggunakan <strong className="text-indigo-200">Kode Unik ({selectedRecord.ID_UNIK})</strong> yang tersambung dengan Google Drive secara permanen. 
+                        Ketika Anda pertama kali mengunggah dokumen, folder akan dibuat dan ID-nya akan dikunci secara otomatis ke baris bidang ini agar tidak pernah tertukar atau salah tampil!
+                      </>
+                    )}
                   </p>
                 </div>
               </div>

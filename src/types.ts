@@ -85,6 +85,7 @@ export interface LandRecord {
   LINK_DOKUMEN_LAIN: string;
   LINK_DOKUMENTASI_BIDANG: string;
   LINK_WAJAH_PEMILIK: string;
+  DRIVE_FOLDER_ID: string;
   
   // QC statuses
   QC_STATUS: 'PENDING' | 'APPROVED' | 'REJECTED';
@@ -134,7 +135,7 @@ export const getSheetHeaders = (): string[] => {
     "LINK_KTP", "LINK_KK", "LINK_ALAS_HAK", "LINK_PERALIHAN_HAK",
     "QC_STATUS", "QC_NOTES", "QC_BY", "QC_DATE", "ID_UNIK", "JENIS_PERALIHAN_HAK",
     "LINK_JUAL_BELI", "LINK_KETERANGAN_WARIS", "LINK_KUASA_WARIS", "LINK_SURAT_KUASA", "LINK_KET_BEDA_NAMA", "LINK_WAKAF", "LINK_KLAIM_TANAMAN", "LINK_KLAIM_BANGUNAN", "LINK_DOKUMEN_LAIN",
-    "LINK_DOKUMENTASI_BIDANG", "LINK_WAJAH_PEMILIK"
+    "LINK_DOKUMENTASI_BIDANG", "LINK_WAJAH_PEMILIK", "DRIVE_FOLDER_ID"
   ];
 
   return [...baseHeaders, ...buildingHeaders, ...plantHeaders, ...adminAndLinksHeaders];
@@ -221,7 +222,8 @@ export const recordToRow = (record: LandRecord): string[] => {
     record.LINK_KLAIM_BANGUNAN || "",
     record.LINK_DOKUMEN_LAIN || "",
     record.LINK_DOKUMENTASI_BIDANG || "",
-    record.LINK_WAJAH_PEMILIK || ""
+    record.LINK_WAJAH_PEMILIK || "",
+    record.DRIVE_FOLDER_ID || ""
   );
 
   return row;
@@ -341,6 +343,7 @@ export const rowToRecord = (row: any[], index?: number): LandRecord => {
   record.LINK_DOKUMEN_LAIN = getVal(adminStartIdx + 33);
   record.LINK_DOKUMENTASI_BIDANG = getVal(adminStartIdx + 34);
   record.LINK_WAJAH_PEMILIK = getVal(adminStartIdx + 35);
+  record.DRIVE_FOLDER_ID = getVal(adminStartIdx + 36);
 
   return record as LandRecord;
 };
@@ -376,7 +379,8 @@ export const createEmptyRecord = (): LandRecord => {
     LINK_KLAIM_BANGUNAN: "",
     LINK_DOKUMEN_LAIN: "",
     LINK_DOKUMENTASI_BIDANG: "",
-    LINK_WAJAH_PEMILIK: ""
+    LINK_WAJAH_PEMILIK: "",
+    DRIVE_FOLDER_ID: ""
   };
 };
 

@@ -244,6 +244,13 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
     }
   }, [activeSubTab]);
 
+  // Reset sub-tab if guest user somehow navigates to geojson tab
+  useEffect(() => {
+    if (role === 'GUEST' && activeSubTab === 'geojson') {
+      setActiveSubTab('peta');
+    }
+  }, [role, activeSubTab]);
+
   // Leaflet Tile Layers
   const tileLayers = useRef<{ osm: L.TileLayer; satelit: L.TileLayer; google: L.TileLayer } | null>(null);
 
@@ -795,22 +802,24 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
           <MapIcon className="w-4 h-4 text-indigo-400" />
           Peta & Navigasi Spasial
         </button>
-        <button
-          onClick={() => setActiveSubTab('geojson')}
-          className={`px-4 py-2.5 text-sm font-bold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
-            activeSubTab === 'geojson'
-              ? 'border-indigo-500 text-indigo-300 bg-indigo-500/5 rounded-t-xl'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Layers className="w-4 h-4 text-indigo-400" />
-          Manajemen Berkas GeoJSON
-          {loadedGeoJSONs.length > 0 && (
-            <span className="bg-indigo-500/20 text-indigo-300 text-[10px] px-1.5 py-0.5 rounded-full border border-indigo-500/30">
-              {loadedGeoJSONs.length}
-            </span>
-          )}
-        </button>
+        {role !== 'GUEST' && (
+          <button
+            onClick={() => setActiveSubTab('geojson')}
+            className={`px-4 py-2.5 text-sm font-bold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+              activeSubTab === 'geojson'
+                ? 'border-indigo-500 text-indigo-300 bg-indigo-500/5 rounded-t-xl'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Layers className="w-4 h-4 text-indigo-400" />
+            Manajemen Berkas GeoJSON
+            {loadedGeoJSONs.length > 0 && (
+              <span className="bg-indigo-500/20 text-indigo-300 text-[10px] px-1.5 py-0.5 rounded-full border border-indigo-500/30">
+                {loadedGeoJSONs.length}
+              </span>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Tab: Peta & Navigasi Spasial */}

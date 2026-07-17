@@ -429,7 +429,7 @@ export default function FormInput({ records, onSave }: FormInputProps) {
                     setSelectedSpan('');
                     setSelectedNobid('');
                   }}
-                  className="px-4.5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/10 hover:shadow-indigo-600/20 active:scale-98 transition-all cursor-pointer border border-indigo-400/30 shrink-0"
+                  className="px-4.5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-white-keep font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/10 hover:shadow-indigo-600/20 active:scale-98 transition-all cursor-pointer border border-indigo-400/30 shrink-0"
                 >
                   <Check className="w-4 h-4 text-emerald-300" />
                   Muat Data ke Formulir Edit
