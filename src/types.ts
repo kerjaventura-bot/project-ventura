@@ -402,3 +402,14 @@ export function compareLandRecords(a: LandRecord, b: LandRecord): number {
   const nobidB = b.NOBID || '';
   return nobidA.localeCompare(nobidB, undefined, { numeric: true, sensitivity: 'base' });
 }
+
+export interface OperatorConfig {
+  id: string; // Document/username ID
+  username: string;
+  password?: string; // Stored in plain text for simplicity as requested/used in this admin setup
+  name: string;
+  role: 'FIELD' | 'QC';
+  projectId: string; // The specific project ID they are restricted to (or 'all')
+  createdAt: number;
+}
+

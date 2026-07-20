@@ -2,11 +2,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { 
   googleSignIn, logout, auth, setAccessToken, db
 } from './lib/firebase';
-import { doc, getDoc, setDoc, collection, addDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, addDoc, getDocs, deleteDoc } from 'firebase/firestore';
 import { 
   findOrCreateSpreadsheet, fetchSpreadsheetRecords, saveRecordToSpreadsheet, setupProjectDriveStructure, findOrCreateFolder 
 } from './lib/googleApi';
-import { type LandRecord, compareLandRecords } from './types';
+import { type LandRecord, compareLandRecords, type OperatorConfig } from './types';
 import Dashboard from './components/Dashboard';
 import FormInput from './components/FormInput';
 import DocUpload from './components/DocUpload';
@@ -16,8 +16,8 @@ import InteractiveMap from './components/InteractiveMap';
 import { 
   Map, Database, UploadCloud, ShieldAlert, LogOut, 
   RefreshCw, FileSpreadsheet, KeyRound, CheckSquare,
-  Plus, UserCheck, Settings, Folder, Key, Eye, EyeOff, Lock, Unlock, Info, ShieldCheck, HelpCircle, Briefcase,
-  Pin, Menu, Clock, LayoutGrid, Sun, Moon, Copy
+  Plus, User, UserCheck, Settings, Folder, Key, Eye, EyeOff, Lock, Unlock, Info, ShieldCheck, HelpCircle, Briefcase,
+  Pin, Menu, Clock, LayoutGrid, Sun, Moon, Copy, Users
 } from 'lucide-react';
 
 interface ProjectConfig {
@@ -201,6 +201,11 @@ export default function App() {
   const [newFieldPin, setNewFieldPin] = useState('');
   const [newQcPin, setNewQcPin] = useState('');
 
+  // Operator / Team Member Name Tracking
+  const [operatorName, setOperatorName] = useState<string>(() => {
+    return localStorage.getItem('project_ventura_operator_name') || '';
+  });
+
   // Project ID configuration & Syncing tools
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editSpreadsheetId, setEditSpreadsheetId] = useState('');
@@ -209,10 +214,31 @@ export default function App() {
   const [editPublicCsvUrl, setEditPublicCsvUrl] = useState('');
   
   const [showBackupTools, setShowBackupTools] = useState(false);
-  const [projectSubTab, setProjectSubTab] = useState<'projects' | 'pins' | 'migration'>('projects');
+  const [projectSubTab, setProjectSubTab] = useState<'projects' | 'pins' | 'migration' | 'operators'>('projects');
   const [backupJsonString, setBackupJsonString] = useState('');
   const [importStatus, setImportStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [importMessage, setImportMessage] = useState('');
+
+  // Registered Operator specific states
+  const [operators, setOperators] = useState<OperatorConfig[]>([]);
+  const [isLoadingOperators, setIsLoadingOperators] = useState(false);
+  const [isOperatorLocked, setIsOperatorLocked] = useState<boolean>(() => {
+    return localStorage.getItem('project_ventura_operator_locked') === 'true';
+  });
+  const [operatorLockedProjectId, setOperatorLockedProjectId] = useState<string>(() => {
+    return localStorage.getItem('project_ventura_operator_locked_project_id') || '';
+  });
+  const [isOperatorLoginMode, setIsOperatorLoginMode] = useState(false);
+  const [operatorLoginUsername, setOperatorLoginUsername] = useState('');
+  const [operatorLoginPassword, setOperatorLoginPassword] = useState('');
+
+  // Form states for creating a new operator
+  const [newOpUsername, setNewOpUsername] = useState('');
+  const [newOpPassword, setNewOpPassword] = useState('');
+  const [newOpName, setNewOpName] = useState('');
+  const [newOpRole, setNewOpRole] = useState<'FIELD' | 'QC'>('FIELD');
+  const [newOpProjectId, setNewOpProjectId] = useState('');
+  const [operatorError, setOperatorError] = useState<string | null>(null);
 
   // Save projects to Firestore cloud database (so other accounts can sync automatically)
   const saveProjectsToCloud = async (updatedProjects: ProjectConfig[]) => {
@@ -255,10 +281,111 @@ export default function App() {
     }
   }, []);
 
-  // Initialize auth state and load projects from cloud on mount
+  // Load registered operators from Firestore cloud database
+  const loadOperatorsFromCloud = useCallback(async () => {
+    setIsLoadingOperators(true);
+    try {
+      const qSnap = await getDocs(collection(db, 'registered_operators'));
+      const opsList: OperatorConfig[] = [];
+      qSnap.forEach((doc) => {
+        const data = doc.data();
+        opsList.push({
+          id: doc.id,
+          username: data.username || doc.id,
+          password: data.password || '',
+          name: data.name || '',
+          role: data.role || 'FIELD',
+          projectId: data.projectId || '',
+          createdAt: data.createdAt || Date.now(),
+        });
+      });
+      opsList.sort((a, b) => b.createdAt - a.createdAt);
+      setOperators(opsList);
+      console.log("Daftar operator berhasil disinkronkan dari Firestore cloud!");
+    } catch (err) {
+      console.warn("Gagal memuat operator dari Firestore cloud:", err);
+    } finally {
+      setIsLoadingOperators(false);
+    }
+  }, []);
+
+  // Action: Add new Operator
+  const handleAddOperator = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setOperatorError(null);
+
+    const usernameTrimmed = newOpUsername.trim().toLowerCase();
+    const passwordTrimmed = newOpPassword.trim();
+    const nameTrimmed = newOpName.trim();
+    const projectIdSelected = newOpProjectId || 'all';
+
+    if (!usernameTrimmed || !passwordTrimmed || !nameTrimmed) {
+      setOperatorError("Semua kolom (Nama Pengguna, Sandi, & Nama Lengkap) wajib diisi!");
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9_]{3,20}$/.test(usernameTrimmed)) {
+      setOperatorError("Nama pengguna harus 3-20 karakter dan hanya boleh berisi huruf, angka, atau garis bawah (_).");
+      return;
+    }
+
+    try {
+      // Check duplicate
+      const exists = operators.some(op => op.username === usernameTrimmed);
+      if (exists) {
+        setOperatorError(`Nama pengguna "${usernameTrimmed}" sudah terdaftar.`);
+        return;
+      }
+
+      const newOp: OperatorConfig = {
+        id: usernameTrimmed,
+        username: usernameTrimmed,
+        password: passwordTrimmed,
+        name: nameTrimmed,
+        role: newOpRole,
+        projectId: projectIdSelected,
+        createdAt: Date.now(),
+      };
+
+      await setDoc(doc(db, 'registered_operators', usernameTrimmed), newOp);
+      
+      setOperators(prev => [newOp, ...prev]);
+
+      // Reset form
+      setNewOpUsername('');
+      setNewOpPassword('');
+      setNewOpName('');
+      setNewOpRole('FIELD');
+      setNewOpProjectId('');
+      
+      console.log("Operator berhasil ditambahkan:", usernameTrimmed);
+    } catch (err: any) {
+      console.error("Gagal menyimpan operator ke Firestore:", err);
+      setOperatorError(`Gagal mendaftarkan operator: ${err.message || err}`);
+    }
+  };
+
+  // Action: Delete Operator
+  const handleDeleteOperator = async (username: string) => {
+    if (!window.confirm(`Apakah Anda yakin ingin menghapus operator "${username}"?`)) {
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, 'registered_operators', username));
+      setOperators(prev => prev.filter(op => op.username !== username));
+      console.log("Operator berhasil dihapus:", username);
+    } catch (err: any) {
+      console.error("Gagal menghapus operator:", err);
+      alert(`Gagal menghapus operator: ${err.message || err}`);
+    }
+  };
+
+  // Initialize auth state and load projects and operators from cloud on mount
   useEffect(() => {
     loadProjectsFromCloud();
-  }, [loadProjectsFromCloud]);
+    loadOperatorsFromCloud();
+  }, [loadProjectsFromCloud, loadOperatorsFromCloud]);
 
   // Initialize auth state
   useEffect(() => {
@@ -271,6 +398,7 @@ export default function App() {
       if (currentUser) {
         setUser(currentUser);
         loadProjectsFromCloud();
+        loadOperatorsFromCloud();
       } else {
         setUser(null);
         setToken(null);
@@ -279,7 +407,7 @@ export default function App() {
       }
     });
     return () => unsubscribe();
-  }, [loadProjectsFromCloud]);
+  }, [loadProjectsFromCloud, loadOperatorsFromCloud]);
 
   // Handle SignIn action
   const handleLogin = async () => {
@@ -311,7 +439,13 @@ export default function App() {
       setSpreadsheetId(null);
       setRecords([]);
       setRole(null);
+      setOperatorName('');
+      setIsOperatorLocked(false);
+      setOperatorLockedProjectId('');
       localStorage.removeItem('project_ventura_role');
+      localStorage.removeItem('project_ventura_operator_name');
+      localStorage.removeItem('project_ventura_operator_locked');
+      localStorage.removeItem('project_ventura_operator_locked_project_id');
       setActiveMenu('dashboard');
     } catch (err) {
       console.error("Logout failed:", err);
@@ -585,6 +719,7 @@ export default function App() {
         projectName: activeProj?.name || 'Unknown Project',
         timestamp: Date.now(),
         userEmail: user?.email || 'unknown',
+        operatorName: operatorName || 'unknown',
         userRole: role || 'GUEST',
         actionType,
         recordCode,
@@ -598,6 +733,10 @@ export default function App() {
 
   // Callback to add/update a record in the sheet
   const handleSaveRecord = async (record: LandRecord, isEdit: boolean) => {
+    if (isOperatorLocked && operatorLockedProjectId && activeProjectId !== operatorLockedProjectId) {
+      throw new Error('Izin Ditolak: Akun operator Anda dikunci hanya untuk jalur proyek yang teregister.');
+    }
+
     if (!token || !spreadsheetId) {
       throw new Error('Koneksi Google Drive terputus. Silakan hubungkan ulang.');
     }
@@ -656,6 +795,10 @@ export default function App() {
 
   // Callback to update a record (e.g. after adding file links or admin QC)
   const handleUpdateRecord = async (updatedRecord: LandRecord) => {
+    if (isOperatorLocked && operatorLockedProjectId && activeProjectId !== operatorLockedProjectId) {
+      throw new Error('Izin Ditolak: Akun operator Anda dikunci hanya untuk jalur proyek yang teregister.');
+    }
+
     if (!token || !spreadsheetId) {
       throw new Error('Koneksi Google Drive terputus. Silakan hubungkan ulang.');
     }
@@ -756,10 +899,75 @@ export default function App() {
     logActivity(updatedRecord.CODE, actionType, details);
   };
 
-  // Handle Role Verification
+  // Handle Registered Operator Verification
+  const handleVerifyOperator = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPinError(null);
+
+    const userLower = operatorLoginUsername.trim().toLowerCase();
+    const passTrimmed = operatorLoginPassword.trim();
+
+    if (!userLower || !passTrimmed) {
+      setPinError('Nama pengguna dan sandi operator wajib diisi.');
+      return;
+    }
+
+    // Find in preloaded operators list
+    const matchedOp = operators.find(op => op.username === userLower);
+
+    if (!matchedOp) {
+      setPinError('Akun Operator tidak ditemukan atau Nama Pengguna salah.');
+      return;
+    }
+
+    if (matchedOp.password !== passTrimmed) {
+      setPinError('Sandi akun operator salah. Silakan hubungi Admin.');
+      return;
+    }
+
+    // Success! Log them in
+    setRole(matchedOp.role);
+    setOperatorName(matchedOp.name);
+    localStorage.setItem('project_ventura_role', matchedOp.role);
+    localStorage.setItem('project_ventura_operator_name', matchedOp.name);
+
+    // If restricted to 1 project path
+    if (matchedOp.projectId && matchedOp.projectId !== 'all') {
+      setIsOperatorLocked(true);
+      setOperatorLockedProjectId(matchedOp.projectId);
+      setActiveProjectId(matchedOp.projectId);
+      localStorage.setItem('project_ventura_operator_locked', 'true');
+      localStorage.setItem('project_ventura_operator_locked_project_id', matchedOp.projectId);
+      localStorage.setItem('project_ventura_active_project_id', matchedOp.projectId);
+    } else {
+      setIsOperatorLocked(false);
+      setOperatorLockedProjectId('');
+      localStorage.removeItem('project_ventura_operator_locked');
+      localStorage.removeItem('project_ventura_operator_locked_project_id');
+    }
+
+    // Clear login fields
+    setOperatorLoginUsername('');
+    setOperatorLoginPassword('');
+    setActiveMenu('dashboard');
+    console.log(`Operator "${matchedOp.name}" successfully logged in with role ${matchedOp.role}`);
+  };
+
+  // Handle Role Verification (Legacy PIN approach)
   const handleVerifyRole = (e: React.FormEvent) => {
     e.preventDefault();
     setPinError(null);
+
+    const trimmedName = operatorName.trim();
+    if (loginRole !== 'GUEST' && !trimmedName) {
+      setPinError('Nama Petugas Lapangan / Operator wajib diisi untuk pelacakan perubahan data.');
+      return;
+    }
+
+    // Save final trimmed name to localStorage
+    const finalOperatorName = trimmedName || 'Tamu Kontraktor';
+    setOperatorName(finalOperatorName);
+    localStorage.setItem('project_ventura_operator_name', finalOperatorName);
 
     const isBypass = localStorage.getItem('project_ventura_guest_bypass') === 'true';
 
@@ -795,7 +1003,13 @@ export default function App() {
   // Switch role action (returns to role selection screen)
   const handleSwitchRole = () => {
     setRole(null);
+    setOperatorName('');
+    setIsOperatorLocked(false);
+    setOperatorLockedProjectId('');
     localStorage.removeItem('project_ventura_role');
+    localStorage.removeItem('project_ventura_operator_name');
+    localStorage.removeItem('project_ventura_operator_locked');
+    localStorage.removeItem('project_ventura_operator_locked_project_id');
   };
 
   // Admin action: Add new project path
@@ -1090,6 +1304,12 @@ export default function App() {
 
                 {/* Role Badge and Switch */}
                 <div className="flex items-center gap-2 pl-2.5 border-l border-white/10 shrink-0">
+                  {operatorName && (
+                    <div className="flex flex-col text-right pr-1">
+                      <span className="text-[10px] font-extrabold text-slate-200 uppercase leading-none">{operatorName}</span>
+                      <span className="text-[8px] font-mono text-indigo-400 mt-0.5">Operator</span>
+                    </div>
+                  )}
                   <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border uppercase tracking-wider ${
                     role === 'ADMIN' ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30' :
                     role === 'FIELD' ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' :
@@ -1222,168 +1442,296 @@ export default function App() {
               </div>
               <h2 className="text-xl font-black text-white uppercase tracking-tight font-sans">Verifikasi Akses Peran</h2>
               <p className="text-xs text-slate-400 leading-normal max-w-xs mx-auto">
-                Terhubung sebagai <span className="font-semibold text-indigo-400 font-mono">{user.email}</span>. Pilih peran Anda untuk melanjutkan.
+                Terhubung sebagai <span className="font-semibold text-indigo-400 font-mono">{user.email}</span>. Pilih metode masuk Anda.
               </p>
             </div>
 
-            <form onSubmit={handleVerifyRole} className="space-y-5">
-              {/* Step 1: Project / Transmission Path Selection */}
-              <div className="space-y-2">
-                <label htmlFor="login_project_select" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
-                  Langkah 1: Pilih Jalur Transmisi / Proyek
-                </label>
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-indigo-400">
-                    <Briefcase className="w-4 h-4" />
-                  </span>
-                  <select
-                    id="login_project_select"
-                    value={activeProjectId}
-                    onChange={(e) => {
-                      setActiveProjectId(e.target.value);
-                      localStorage.setItem('project_ventura_active_project_id', e.target.value);
-                    }}
-                    className="w-full pl-10 pr-4 py-3 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer font-sans font-bold"
-                  >
-                    {projects.map((proj) => (
-                      <option key={proj.id} value={proj.id} className="bg-slate-950 text-white font-semibold">
-                        {proj.name}
-                      </option>
-                    ))}
-                  </select>
+            {/* Tab switch for Login Mode */}
+            <div className="grid grid-cols-2 bg-slate-950 p-1 rounded-xl border border-white/5">
+              <button
+                type="button"
+                onClick={() => { setIsOperatorLoginMode(false); setPinError(null); }}
+                className={`py-2 px-3 text-center text-[10px] font-extrabold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
+                  !isOperatorLoginMode 
+                    ? 'bg-indigo-600 text-white shadow' 
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                PIN Peran Umum
+              </button>
+              <button
+                type="button"
+                onClick={() => { setIsOperatorLoginMode(true); setPinError(null); }}
+                className={`py-2 px-3 text-center text-[10px] font-extrabold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
+                  isOperatorLoginMode 
+                    ? 'bg-indigo-600 text-white shadow' 
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Akun Operator
+              </button>
+            </div>
+
+            {isOperatorLoginMode ? (
+              /* OPERATOR LOGIN FORM */
+              <form onSubmit={handleVerifyOperator} className="space-y-5">
+                <div className="bg-slate-900/40 p-3.5 rounded-xl border border-white/5 text-slate-400 text-[10px] leading-relaxed">
+                  🔒 Akun operator terdaftar secara otomatis mengunci jalur proyek dan peran pekerjaan (Lapangan / QC) Anda sesuai dengan yang telah ditentukan oleh Administrator.
                 </div>
-                <p className="text-[10px] text-slate-400 leading-normal">
-                  Seluruh pengisian data lahan, berkas fisik PDF, & QC akan difokuskan khusus untuk jalur proyek yang Anda pilih ini.
-                </p>
-              </div>
 
-              {/* Step 2: Role selection */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
-                  Langkah 2: Pilih Peran Pekerjaan Anda
-                </label>
-                <div className="grid grid-cols-1 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => { setLoginRole('ADMIN'); setPinError(null); }}
-                    className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
-                      loginRole === 'ADMIN' 
-                        ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-lg' 
-                        : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
-                    }`}
-                  >
-                    <div>
-                      <strong className="text-xs block text-left">1. Administrator (Admin)</strong>
-                      <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Kelola seluruh data, tambah jalur proyek, & atur PIN akses</span>
-                    </div>
-                    {loginRole === 'ADMIN' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-400 shrink-0"></div>}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => { setLoginRole('FIELD'); setPinError(null); }}
-                    className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
-                      loginRole === 'FIELD' 
-                        ? 'bg-emerald-600/20 border-emerald-500 text-white shadow-lg' 
-                        : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
-                    }`}
-                  >
-                    <div>
-                      <strong className="text-xs block text-left">2. Petugas Lapangan (Lapangan)</strong>
-                      <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Pengisian data lahan, tanaman, bangunan, & upload berkas PDF</span>
-                    </div>
-                    {loginRole === 'FIELD' && <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0"></div>}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => { setLoginRole('QC'); setPinError(null); }}
-                    className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
-                      loginRole === 'QC' 
-                        ? 'bg-amber-600/20 border-amber-500 text-white shadow-lg' 
-                        : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
-                    }`}
-                  >
-                    <div>
-                      <strong className="text-xs block text-left">3. Verifikator Quality Control (QC)</strong>
-                      <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Cek kelayakan data, isi status QC berkas, & unggah berkas</span>
-                    </div>
-                    {loginRole === 'QC' && <div className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0"></div>}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => { setLoginRole('GUEST'); setPinError(null); }}
-                    className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
-                      loginRole === 'GUEST' 
-                        ? 'bg-slate-700/35 border-slate-500 text-white shadow-lg' 
-                        : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
-                    }`}
-                  >
-                    <div>
-                      <strong className="text-xs block text-left">4. Tamu Kontraktor (Tamu)</strong>
-                      <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Akses Dashboard Utama, visualisasi, dan grafik progres (Read-Only)</span>
-                    </div>
-                    {loginRole === 'GUEST' && <div className="w-2.5 h-2.5 rounded-full bg-slate-400 shrink-0"></div>}
-                  </button>
-                </div>
-              </div>
-
-              {/* Step 3: PIN Code entry */}
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <label htmlFor="role_pin_input" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">
-                    Langkah 3: {loginRole === 'GUEST' ? 'PIN Tamu (Opsional / tamu123)' : `Masukkan PIN Akses ${loginRole}`}
+                <div className="space-y-2">
+                  <label htmlFor="op_login_username" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
+                    Nama Pengguna Operator (Username)
                   </label>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                      <User className="w-4 h-4" />
+                    </span>
+                    <input
+                      id="op_login_username"
+                      type="text"
+                      required
+                      value={operatorLoginUsername}
+                      onChange={(e) => setOperatorLoginUsername(e.target.value)}
+                      placeholder="Masukkan nama pengguna..."
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <label htmlFor="op_login_password" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
+                      Sandi Akses (Password)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowPin(!showPin)}
+                      className="text-[10px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-bold cursor-pointer"
+                    >
+                      {showPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      {showPin ? 'Sembunyikan' : 'Tampilkan'}
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                      <Key className="w-4 h-4" />
+                    </span>
+                    <input
+                      id="op_login_password"
+                      type={showPin ? 'text' : 'password'}
+                      required
+                      value={operatorLoginPassword}
+                      onChange={(e) => setOperatorLoginPassword(e.target.value)}
+                      placeholder="Masukkan sandi..."
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                    />
+                  </div>
+                </div>
+
+                {pinError && (
+                  <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-lg font-semibold flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                    <p>{pinError}</p>
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={() => setShowPin(!showPin)}
-                    className="text-[10px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-bold cursor-pointer"
+                    onClick={handleLogout}
+                    className="flex-1 py-2.5 bg-slate-900 border border-white/10 hover:bg-slate-950 text-slate-300 text-xs font-bold rounded-xl transition-all cursor-pointer"
                   >
-                    {showPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    {showPin ? 'Sembunyikan' : 'Tampilkan'}
+                    Ganti Akun Google
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-indigo-600/25 cursor-pointer"
+                  >
+                    Masuk Operator
                   </button>
                 </div>
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
-                    <Key className="w-4 h-4" />
-                  </span>
-                  <input
-                    id="role_pin_input"
-                    type={showPin ? 'text' : 'password'}
-                    value={pinInput}
-                    onChange={(e) => setPinInput(e.target.value)}
-                    placeholder={loginRole === 'GUEST' ? 'Masukkan tamu123 atau biarkan kosong' : `Sandi PIN ${loginRole}...`}
-                    className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 tracking-widest placeholder:tracking-normal placeholder:text-slate-500 font-mono"
-                  />
+              </form>
+            ) : (
+              /* LEGACY PIN LOGIN FORM */
+              <form onSubmit={handleVerifyRole} className="space-y-5">
+                {/* Step 1: Project / Transmission Path Selection */}
+                <div className="space-y-2">
+                  <label htmlFor="login_project_select" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
+                    Langkah 1: Pilih Jalur Transmisi / Proyek
+                  </label>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-indigo-400">
+                      <Briefcase className="w-4 h-4" />
+                    </span>
+                    <select
+                      id="login_project_select"
+                      value={activeProjectId}
+                      onChange={(e) => {
+                        setActiveProjectId(e.target.value);
+                        localStorage.setItem('project_ventura_active_project_id', e.target.value);
+                      }}
+                      className="w-full pl-10 pr-4 py-3 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer font-sans font-bold"
+                    >
+                      {projects.map((proj) => (
+                        <option key={proj.id} value={proj.id} className="bg-slate-950 text-white font-semibold">
+                          {proj.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-normal">
+                    Seluruh pengisian data lahan, berkas fisik PDF, & QC akan difokuskan khusus untuk jalur proyek yang Anda pilih ini.
+                  </p>
                 </div>
-                
 
-              </div>
+                {/* Step 2: Role selection */}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
+                    Langkah 2: Pilih Peran Pekerjaan Anda
+                  </label>
+                  <div className="grid grid-cols-1 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { setLoginRole('ADMIN'); setPinError(null); }}
+                      className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
+                        loginRole === 'ADMIN' 
+                          ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-lg' 
+                          : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
+                      }`}
+                    >
+                      <div>
+                        <strong className="text-xs block text-left">1. Administrator (Admin)</strong>
+                        <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Kelola seluruh data, tambah jalur proyek, & atur PIN akses</span>
+                      </div>
+                      {loginRole === 'ADMIN' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-400 shrink-0"></div>}
+                    </button>
 
-              {pinError && (
-                <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-lg font-semibold flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
-                  <p>{pinError}</p>
+                    <button
+                      type="button"
+                      onClick={() => { setLoginRole('FIELD'); setPinError(null); }}
+                      className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
+                        loginRole === 'FIELD' 
+                          ? 'bg-emerald-600/20 border-emerald-500 text-white shadow-lg' 
+                          : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
+                      }`}
+                    >
+                      <div>
+                        <strong className="text-xs block text-left">2. Petugas Lapangan (Lapangan)</strong>
+                        <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Pengisian data lahan, tanaman, bangunan, & upload berkas PDF</span>
+                      </div>
+                      {loginRole === 'FIELD' && <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0"></div>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { setLoginRole('QC'); setPinError(null); }}
+                      className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
+                        loginRole === 'QC' 
+                          ? 'bg-amber-600/20 border-amber-500 text-white shadow-lg' 
+                          : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
+                      }`}
+                    >
+                      <div>
+                        <strong className="text-xs block text-left">3. Verifikator Quality Control (QC)</strong>
+                        <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Cek kelayakan data, isi status QC berkas, & unggah berkas</span>
+                      </div>
+                      {loginRole === 'QC' && <div className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0"></div>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { setLoginRole('GUEST'); setPinError(null); }}
+                      className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
+                        loginRole === 'GUEST' 
+                          ? 'bg-slate-700/35 border-slate-500 text-white shadow-lg' 
+                          : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
+                      }`}
+                    >
+                      <div>
+                        <strong className="text-xs block text-left">4. Tamu Kontraktor (Tamu)</strong>
+                        <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Akses Dashboard Utama, visualisasi, dan grafik progres (Read-Only)</span>
+                      </div>
+                      {loginRole === 'GUEST' && <div className="w-2.5 h-2.5 rounded-full bg-slate-400 shrink-0"></div>}
+                    </button>
+                  </div>
                 </div>
-              )}
 
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  className="flex-1 py-2.5 bg-slate-900 border border-white/10 hover:bg-slate-950 text-slate-300 text-xs font-bold rounded-xl transition-all cursor-pointer"
-                >
-                  Ganti Akun Google
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-indigo-600/25 cursor-pointer"
-                >
-                  Verifikasi & Masuk
-                </button>
-              </div>
-            </form>
+                {/* Step 3: Operator / Team Member Name */}
+                <div className="space-y-2">
+                  <label htmlFor="operator_name_input" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
+                    Langkah 3: {loginRole === 'GUEST' ? 'Nama Anda / Tamu (Opsional)' : 'Nama Petugas Lapangan / Operator (Wajib)'}
+                  </label>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                      <User className="w-4 h-4" />
+                    </span>
+                    <input
+                      id="operator_name_input"
+                      type="text"
+                      required={loginRole !== 'GUEST'}
+                      value={operatorName}
+                      onChange={(e) => setOperatorName(e.target.value)}
+                      placeholder={loginRole === 'GUEST' ? 'Tuliskan nama Anda atau biarkan kosong...' : 'Tuliskan nama lengkap atau tim Anda (contoh: Tim 1, Budi Hartono)...'}
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold placeholder:font-normal placeholder:text-slate-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Step 4: PIN Code entry */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <label htmlFor="role_pin_input" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">
+                      Langkah 4: {loginRole === 'GUEST' ? 'PIN Tamu (Opsional / tamu123)' : `Masukkan PIN Akses ${loginRole}`}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowPin(!showPin)}
+                      className="text-[10px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-bold cursor-pointer"
+                    >
+                      {showPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      {showPin ? 'Sembunyikan' : 'Tampilkan'}
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                      <Key className="w-4 h-4" />
+                    </span>
+                    <input
+                      id="role_pin_input"
+                      type={showPin ? 'text' : 'password'}
+                      value={pinInput}
+                      onChange={(e) => setPinInput(e.target.value)}
+                      placeholder={loginRole === 'GUEST' ? 'Masukkan tamu123 atau biarkan kosong' : `Sandi PIN ${loginRole}...`}
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 tracking-widest placeholder:tracking-normal placeholder:text-slate-500 font-mono"
+                    />
+                  </div>
+                </div>
+
+                {pinError && (
+                  <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-lg font-semibold flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                    <p>{pinError}</p>
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="flex-1 py-2.5 bg-slate-900 border border-white/10 hover:bg-slate-950 text-slate-300 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                  >
+                    Ganti Akun Google
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-indigo-600/25 cursor-pointer"
+                  >
+                    Verifikasi & Masuk
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </main>
       ) : (
@@ -2064,6 +2412,17 @@ export default function App() {
                         <RefreshCw className="w-4 h-4 text-indigo-400" />
                         Ekspor & Impor Database
                       </button>
+                      <button
+                        onClick={() => setProjectSubTab('operators')}
+                        className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+                          projectSubTab === 'operators'
+                            ? 'border-indigo-500 text-indigo-300 bg-indigo-500/5 rounded-t-xl'
+                            : 'border-transparent text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Users className="w-4 h-4 text-indigo-400" />
+                        Registrasi Operator
+                      </button>
                     </div>
 
                     {/* Tab 1: Jalur Transmisi & Proyek */}
@@ -2464,6 +2823,192 @@ export default function App() {
                               </div>
                             </div>
                           </form>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Tab 4: Registrasi Operator */}
+                    {projectSubTab === 'operators' && (
+                      <div className="space-y-6 animate-fadeIn" id="admin_manage_operators">
+                        {/* A. Register Operator Form */}
+                        <form onSubmit={handleAddOperator} className="glass-card p-6 rounded-2xl border border-indigo-500/30 shadow-xl space-y-4">
+                          <div className="flex items-center gap-1.5 text-indigo-300 text-sm font-bold uppercase tracking-wider border-b border-white/5 pb-2.5">
+                            <Users className="w-5 h-5 text-indigo-400" />
+                            Registrasi Akun Operator Baru
+                          </div>
+                          <p className="text-xs text-slate-400 leading-normal">
+                            Daftarkan akun khusus untuk Petugas Lapangan atau Verifikator Quality Control agar mereka dapat masuk dengan sandi unik masing-masing. Anda juga dapat membatasi pengisian data mereka khusus pada satu jalur proyek tertentu.
+                          </p>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 pt-1">
+                            {/* Full Name */}
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                                Nama Lengkap / Tim
+                              </label>
+                              <input
+                                type="text"
+                                required
+                                value={newOpName}
+                                onChange={(e) => setNewOpName(e.target.value)}
+                                placeholder="Contoh: Budi Santoso / Tim 1"
+                                className="w-full px-3 py-2 bg-slate-950 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            {/* Username */}
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                                Username (Alfanumerik)
+                              </label>
+                              <input
+                                type="text"
+                                required
+                                value={newOpUsername}
+                                onChange={(e) => setNewOpUsername(e.target.value)}
+                                placeholder="Contoh: budi_lapangan"
+                                className="w-full px-3 py-2 bg-slate-950 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            {/* Password */}
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                                Sandi Akses (Password)
+                              </label>
+                              <input
+                                type="text"
+                                required
+                                value={newOpPassword}
+                                onChange={(e) => setNewOpPassword(e.target.value)}
+                                placeholder="Contoh: sandi123"
+                                className="w-full px-3 py-2 bg-slate-950 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            {/* Role selection */}
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                                Peran Level Pekerjaan
+                              </label>
+                              <select
+                                value={newOpRole}
+                                onChange={(e) => setNewOpRole(e.target.value as 'FIELD' | 'QC')}
+                                className="w-full px-3 py-2 bg-slate-950 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer font-bold"
+                              >
+                                <option value="FIELD">Lapangan (Field Operator)</option>
+                                <option value="QC">QC (Quality Control)</option>
+                              </select>
+                            </div>
+
+                            {/* Project routing lock */}
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                                Pembatasan Jalur Proyek
+                              </label>
+                              <select
+                                value={newOpProjectId}
+                                onChange={(e) => setNewOpProjectId(e.target.value)}
+                                className="w-full px-3 py-2 bg-slate-950 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer font-bold"
+                              >
+                                <option value="all">Semua Jalur Proyek (Bebas)</option>
+                                {projects.map(p => (
+                                  <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          {operatorError && (
+                            <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl font-semibold flex items-center gap-2">
+                              <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                              <p>{operatorError}</p>
+                            </div>
+                          )}
+
+                          <div className="flex justify-end gap-2 pt-2 border-t border-white/5">
+                            <button
+                              type="submit"
+                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5"
+                            >
+                              <Plus className="w-4 h-4" />
+                              Daftarkan Operator
+                            </button>
+                          </div>
+                        </form>
+
+                        {/* B. List of Registered Operators */}
+                        <div className="glass-card p-6 rounded-2xl border border-white/10 shadow-xl space-y-4">
+                          <span className="text-xs font-bold text-slate-200 uppercase tracking-wider block">
+                            Daftar Operator Terdaftar ({operators.length})
+                          </span>
+
+                          {isLoadingOperators ? (
+                            <div className="text-center py-8 text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
+                              <RefreshCw className="w-6 h-6 animate-spin text-indigo-400" />
+                              Memuat data operator terdaftar...
+                            </div>
+                          ) : operators.length === 0 ? (
+                            <div className="text-center py-8 text-slate-400 text-xs bg-slate-900/40 rounded-xl border border-white/5 leading-relaxed">
+                              Belum ada operator khusus terdaftar. Seluruh tim saat ini masuk menggunakan PIN Akses Peran Umum.
+                            </div>
+                          ) : (
+                            <div className="overflow-x-auto rounded-xl border border-white/10 bg-slate-950">
+                              <table className="w-full text-left border-collapse">
+                                <thead>
+                                  <tr className="border-b border-white/10 bg-white/5 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                                    <th className="py-3 px-4">Nama Lengkap / Tim</th>
+                                    <th className="py-3 px-4">Username</th>
+                                    <th className="py-3 px-4">Sandi Akses</th>
+                                    <th className="py-3 px-4">Level Peran</th>
+                                    <th className="py-3 px-4">Restriksi Jalur Proyek</th>
+                                    <th className="py-3 px-4 text-right">Aksi</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-white/5 text-xs text-slate-300">
+                                  {operators.map((op) => {
+                                    const matchedProject = projects.find(p => p.id === op.projectId);
+                                    return (
+                                      <tr key={op.id} className="hover:bg-white/[2%] transition-colors">
+                                        <td className="py-3.5 px-4 font-bold text-white">{op.name}</td>
+                                        <td className="py-3.5 px-4 font-mono text-indigo-300">{op.username}</td>
+                                        <td className="py-3.5 px-4 font-mono font-bold text-slate-300">{op.password}</td>
+                                        <td className="py-3.5 px-4">
+                                          <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-md border uppercase tracking-wider ${
+                                            op.role === 'FIELD' 
+                                              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' 
+                                              : 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+                                          }`}>
+                                            {op.role === 'FIELD' ? 'Lapangan' : 'QC'}
+                                          </span>
+                                        </td>
+                                        <td className="py-3.5 px-4">
+                                          {op.projectId === 'all' || !op.projectId ? (
+                                            <span className="text-[10px] text-indigo-400 font-extrabold bg-indigo-500/10 border border-indigo-500/15 px-2 py-0.5 rounded-md">
+                                              Semua Jalur
+                                            </span>
+                                          ) : (
+                                            <span className="text-[10px] text-white font-bold bg-slate-900 border border-white/10 px-2 py-0.5 rounded-md">
+                                              {matchedProject ? matchedProject.name : op.projectId}
+                                            </span>
+                                          )}
+                                        </td>
+                                        <td className="py-3.5 px-4 text-right">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteOperator(op.username)}
+                                            className="px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white text-[10px] font-bold rounded-lg border border-rose-500/20 transition-all cursor-pointer"
+                                          >
+                                            Hapus
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}

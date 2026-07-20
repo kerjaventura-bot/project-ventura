@@ -14,6 +14,7 @@ interface ActivityLog {
   projectName: string;
   timestamp: number;
   userEmail: string;
+  operatorName?: string;
   userRole: string;
   actionType: 'CREATE' | 'UPDATE' | 'UPLOAD' | 'QC';
   details: string;
@@ -55,6 +56,7 @@ export default function ActivityLogsPanel({ activeProjectId, projects }: Activit
             projectName: data.projectName || '',
             timestamp: data.timestamp || Date.now(),
             userEmail: data.userEmail || '',
+            operatorName: data.operatorName || '',
             userRole: data.userRole || '',
             actionType: data.actionType || 'UPDATE',
             details: data.details || '',
@@ -93,12 +95,13 @@ export default function ActivityLogsPanel({ activeProjectId, projects }: Activit
           return false;
         }
 
-        // Search Query (filters by user, code, or details)
+        // Search Query (filters by user, operator name, code, or details)
         if (searchQuery.trim()) {
           const queryLower = searchQuery.toLowerCase().trim();
           return (
             log.recordCode.toLowerCase().includes(queryLower) ||
             log.userEmail.toLowerCase().includes(queryLower) ||
+            (log.operatorName && log.operatorName.toLowerCase().includes(queryLower)) ||
             log.details.toLowerCase().includes(queryLower)
           );
         }
@@ -297,18 +300,23 @@ export default function ActivityLogsPanel({ activeProjectId, projects }: Activit
                         {formatLogDate(log.timestamp)}
                       </td>
 
-                      {/* User Email & Role */}
+                      {/* User Email, Operator Name & Role */}
                       <td className="py-3.5 px-4 whitespace-nowrap">
-                        <div className="flex flex-col gap-1">
+                        <div className="flex flex-col gap-0.5">
                           <div className="flex items-center gap-1.5">
-                            <div className="p-1 bg-white/5 rounded-md text-slate-400">
+                            <div className="p-1 bg-white/5 rounded-md text-slate-400 shrink-0">
                               <User className="w-3 h-3" />
                             </div>
-                            <span className="font-semibold text-slate-200 truncate max-w-[180px] block" title={log.userEmail}>
-                              {log.userEmail}
+                            <span className="font-extrabold text-slate-200 truncate max-w-[180px] block uppercase text-[11px]" title={log.operatorName || log.userEmail}>
+                              {log.operatorName && log.operatorName !== 'unknown' ? log.operatorName : log.userEmail.split('@')[0]}
                             </span>
                           </div>
-                          <span className={`text-[8px] px-1.5 py-0.5 rounded-md font-bold tracking-wider self-start uppercase ${getRoleBadge(log.userRole)}`}>
+                          {log.operatorName && log.operatorName !== 'unknown' && (
+                            <span className="text-[9px] text-slate-400 font-mono pl-6 truncate max-w-[180px] block" title={log.userEmail}>
+                              {log.userEmail}
+                            </span>
+                          )}
+                          <span className={`text-[8px] px-1.5 py-0.5 rounded-md font-extrabold tracking-wider self-start uppercase mt-1 ${getRoleBadge(log.userRole)}`}>
                             {log.userRole || 'GUEST'}
                           </span>
                         </div>
