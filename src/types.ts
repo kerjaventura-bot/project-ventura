@@ -97,6 +97,12 @@ export interface LandRecord {
   ID_UNIK: string;
   JENIS_PERALIHAN_HAK: string;
   rowNumber?: number;
+
+  // Land Boundaries
+  BATAS_UTARA: string;
+  BATAS_SELATAN: string;
+  BATAS_TIMUR: string;
+  BATAS_BARAT: string;
 }
 
 // Helper to generate the exact header row for Google Sheets
@@ -135,7 +141,8 @@ export const getSheetHeaders = (): string[] => {
     "LINK_KTP", "LINK_KK", "LINK_ALAS_HAK", "LINK_PERALIHAN_HAK",
     "QC_STATUS", "QC_NOTES", "QC_BY", "QC_DATE", "ID_UNIK", "JENIS_PERALIHAN_HAK",
     "LINK_JUAL_BELI", "LINK_KETERANGAN_WARIS", "LINK_KUASA_WARIS", "LINK_SURAT_KUASA", "LINK_KET_BEDA_NAMA", "LINK_WAKAF", "LINK_KLAIM_TANAMAN", "LINK_KLAIM_BANGUNAN", "LINK_DOKUMEN_LAIN",
-    "LINK_DOKUMENTASI_BIDANG", "LINK_WAJAH_PEMILIK", "DRIVE_FOLDER_ID"
+    "LINK_DOKUMENTASI_BIDANG", "LINK_WAJAH_PEMILIK", "DRIVE_FOLDER_ID",
+    "BATAS_UTARA", "BATAS_SELATAN", "BATAS_TIMUR", "BATAS_BARAT"
   ];
 
   return [...baseHeaders, ...buildingHeaders, ...plantHeaders, ...adminAndLinksHeaders];
@@ -223,7 +230,11 @@ export const recordToRow = (record: LandRecord): string[] => {
     record.LINK_DOKUMEN_LAIN || "",
     record.LINK_DOKUMENTASI_BIDANG || "",
     record.LINK_WAJAH_PEMILIK || "",
-    record.DRIVE_FOLDER_ID || ""
+    record.DRIVE_FOLDER_ID || "",
+    record.BATAS_UTARA || "",
+    record.BATAS_SELATAN || "",
+    record.BATAS_TIMUR || "",
+    record.BATAS_BARAT || ""
   );
 
   return row;
@@ -345,6 +356,11 @@ export const rowToRecord = (row: any[], index?: number): LandRecord => {
   record.LINK_WAJAH_PEMILIK = getVal(adminStartIdx + 35);
   record.DRIVE_FOLDER_ID = getVal(adminStartIdx + 36);
 
+  record.BATAS_UTARA = getVal(adminStartIdx + 37);
+  record.BATAS_SELATAN = getVal(adminStartIdx + 38);
+  record.BATAS_TIMUR = getVal(adminStartIdx + 39);
+  record.BATAS_BARAT = getVal(adminStartIdx + 40);
+
   return record as LandRecord;
 };
 
@@ -380,7 +396,11 @@ export const createEmptyRecord = (): LandRecord => {
     LINK_DOKUMEN_LAIN: "",
     LINK_DOKUMENTASI_BIDANG: "",
     LINK_WAJAH_PEMILIK: "",
-    DRIVE_FOLDER_ID: ""
+    DRIVE_FOLDER_ID: "",
+    BATAS_UTARA: "",
+    BATAS_SELATAN: "",
+    BATAS_TIMUR: "",
+    BATAS_BARAT: ""
   };
 };
 

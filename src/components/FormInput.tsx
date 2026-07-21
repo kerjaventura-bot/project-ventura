@@ -867,6 +867,55 @@ export default function FormInput({
                 </div>
               </div>
 
+              {/* Batas-Batas Tanah */}
+              <div className="bg-slate-50/50 p-5 rounded-xl border border-slate-100/80 space-y-4">
+                <h3 className="text-sm font-bold text-slate-700 tracking-tight flex items-center gap-1.5 border-b border-slate-200 pb-2">
+                  Batas-Batas Tanah
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Utara Berbatasan Dengan</label>
+                    <input
+                      type="text"
+                      value={formData.BATAS_UTARA || ''}
+                      onChange={(e) => handleChange('BATAS_UTARA', e.target.value)}
+                      className="w-full px-4 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-white"
+                      placeholder="Nama Tetangga / Fasilitas (contoh: Sri Suyani)"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Selatan Berbatasan Dengan</label>
+                    <input
+                      type="text"
+                      value={formData.BATAS_SELATAN || ''}
+                      onChange={(e) => handleChange('BATAS_SELATAN', e.target.value)}
+                      className="w-full px-4 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-white"
+                      placeholder="Nama Tetangga / Fasilitas (contoh: Sri Suyani)"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Timur Berbatasan Dengan</label>
+                    <input
+                      type="text"
+                      value={formData.BATAS_TIMUR || ''}
+                      onChange={(e) => handleChange('BATAS_TIMUR', e.target.value)}
+                      className="w-full px-4 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-white"
+                      placeholder="Nama Tetangga / Fasilitas (contoh: Sri Suyani)"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Barat Berbatasan Dengan</label>
+                    <input
+                      type="text"
+                      value={formData.BATAS_BARAT || ''}
+                      onChange={(e) => handleChange('BATAS_BARAT', e.target.value)}
+                      className="w-full px-4 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 bg-white"
+                      placeholder="Nama Tetangga / Fasilitas (contoh: Tumirah)"
+                    />
+                  </div>
+                </div>
+              </div>
+
               {/* Navigation button */}
               <div className="flex justify-end pt-2">
                 <button

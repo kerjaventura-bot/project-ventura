@@ -249,10 +249,10 @@ export default function DocUpload({
     }
   };
 
-  const handleDownloadPDFDirectly = () => {
+  const handleDownloadPDFDirectly = async () => {
     if (!selectedRecord) return;
     try {
-      const docInstance = generateInventoryPDF(selectedRecord, activeProjectName || "KOMPENSASI JALUR TRANSMISI");
+      const docInstance = await generateInventoryPDF(selectedRecord, activeProjectName || "KOMPENSASI JALUR TRANSMISI");
       docInstance.save(`FORMULIR_INVENTARISASI_${selectedRecord.CODE.replace(/[\/\\?%*:|"<>\s]/g, '_')}.pdf`);
       setStatusMessage({
         type: 'success',
@@ -273,7 +273,7 @@ export default function DocUpload({
     setStatusMessage(null);
     try {
       // 1. Generate PDF blob
-      const docInstance = generateInventoryPDF(selectedRecord, activeProjectName || "KOMPENSASI JALUR TRANSMISI");
+      const docInstance = await generateInventoryPDF(selectedRecord, activeProjectName || "KOMPENSASI JALUR TRANSMISI");
       const pdfBlob = docInstance.output('blob');
       const pdfFile = new File([pdfBlob], `FORMULIR_INVENTARISASI_${selectedRecord.CODE.replace(/[\/\\?%*:|"<>\s]/g, '_')}.pdf`, { type: 'application/pdf' });
 

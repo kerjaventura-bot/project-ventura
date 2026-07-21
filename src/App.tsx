@@ -17,7 +17,7 @@ import {
   Map, Database, UploadCloud, ShieldAlert, LogOut, 
   RefreshCw, FileSpreadsheet, KeyRound, CheckSquare,
   Plus, User, UserCheck, Settings, Folder, Key, Eye, EyeOff, Lock, Unlock, Info, ShieldCheck, HelpCircle, Briefcase,
-  Pin, Menu, Clock, LayoutGrid, Sun, Moon, Copy, Users
+  Pin, Menu, Clock, LayoutGrid, Sun, Moon, Copy, Users, ExternalLink
 } from 'lucide-react';
 
 interface ProjectConfig {
@@ -115,7 +115,7 @@ export default function App() {
     return isBypass ? 'GUEST_BYPASS' : null;
   });
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<React.ReactNode | null>(null);
 
   // Guest Bypass Login Action
   const handleGuestBypassLogin = () => {
@@ -423,7 +423,31 @@ export default function App() {
       }
     } catch (err: any) {
       console.error("Login failed:", err);
-      setAuthError(err.message || 'Gagal masuk dengan akun Google.');
+      const errStr = err.message || String(err);
+      const isPopupBlocked = errStr.includes('popup-blocked') || err.code === 'auth/popup-blocked';
+      const isPopupCancelled = errStr.includes('cancelled-popup-request') || err.code === 'auth/cancelled-popup-request';
+      
+      if (isPopupBlocked || isPopupCancelled) {
+        setAuthError(
+          <div className="space-y-2">
+            <p className="font-bold text-rose-400">Google Sign-In Popup Terblokir / Dibatalkan</p>
+            <p className="text-slate-300 font-normal text-[11px] leading-relaxed">
+              Browser memblokir jendela login karena aplikasi berjalan di dalam iframe AI Studio. 
+              Silakan klik tombol di bawah ini untuk membuka aplikasi langsung di tab baru (Google Sign-In akan bekerja dengan lancar).
+            </p>
+            <a 
+              href={window.location.href} 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="inline-flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] px-3.5 py-2 rounded-lg transition-all mt-1 w-full"
+            >
+              <ExternalLink className="w-3.5 h-3.5" /> Buka Aplikasi di Tab Baru & Login
+            </a>
+          </div>
+        );
+      } else {
+        setAuthError(errStr || 'Gagal masuk dengan akun Google.');
+      }
     } finally {
       setIsLoggingIn(false);
     }
@@ -530,7 +554,11 @@ export default function App() {
       LINK_DOKUMEN_LAIN: "",
       LINK_DOKUMENTASI_BIDANG: "",
       LINK_WAJAH_PEMILIK: "",
-      DRIVE_FOLDER_ID: ""
+      DRIVE_FOLDER_ID: "",
+      BATAS_UTARA: "Sri Suyani",
+      BATAS_SELATAN: "Sri Suyani",
+      BATAS_TIMUR: "Sri Suyani",
+      BATAS_BARAT: "Tumirah"
     };
   };
 
@@ -1372,10 +1400,31 @@ export default function App() {
               </p>
             </div>
 
+            {/* Detect if inside iframe and render warning */}
+            {typeof window !== 'undefined' && window.self !== window.top && !authError && (
+              <div className="p-3.5 bg-indigo-500/10 border border-indigo-500/20 text-slate-300 text-xs rounded-xl text-left space-y-2.5 leading-relaxed">
+                <div className="flex items-center gap-2 text-indigo-400 font-bold">
+                  <Info className="w-4 h-4 shrink-0 text-indigo-400" />
+                  <span className="uppercase tracking-wider text-[10px]">Tips Penggunaan Iframe</span>
+                </div>
+                <p className="text-[11px]">
+                  Aplikasi ini berjalan dalam iframe AI Studio. Google Sign-In memerlukan jendela popup yang mungkin diblokir browser Anda. Jika Anda mengalami kendala login, silakan buka aplikasi di tab baru:
+                </p>
+                <a 
+                  href={window.location.href} 
+                  target="_blank" 
+                  rel="noopener noreferrer" 
+                  className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] py-2 px-3 rounded-lg transition-all"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" /> Buka di Tab Baru & Login
+                </a>
+              </div>
+            )}
+
             {authError && (
-              <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs font-semibold rounded-xl flex items-center gap-2">
-                <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
-                <p className="text-left">{authError}</p>
+              <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs font-semibold rounded-xl flex items-start gap-2">
+                <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                <div className="text-left flex-1">{authError}</div>
               </div>
             )}
 
