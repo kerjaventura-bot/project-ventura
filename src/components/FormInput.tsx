@@ -1,16 +1,28 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Search, Plus, Trash2, Check, ArrowRight, ArrowLeft, Save, 
-  MapPin, Landmark, Home, Sprout, ShieldAlert, Edit3, X
+  MapPin, Landmark, Home, Sprout, ShieldAlert, Edit3, X, FileText
 } from 'lucide-react';
 import { type LandRecord, createEmptyRecord } from '../types';
+import DocUpload from './DocUpload';
 
 interface FormInputProps {
   records: LandRecord[];
   onSave: (record: LandRecord, isEdit: boolean) => Promise<void>;
+  accessToken?: string;
+  onUpdateRecord?: (updatedRecord: LandRecord) => Promise<void>;
+  uploadsFolderId?: string;
+  activeProjectName?: string;
 }
 
-export default function FormInput({ records, onSave }: FormInputProps) {
+export default function FormInput({ 
+  records, 
+  onSave, 
+  accessToken, 
+  onUpdateRecord, 
+  uploadsFolderId, 
+  activeProjectName 
+}: FormInputProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEditRecord, setSelectedEditRecord] = useState<LandRecord | null>(null);
   
@@ -66,7 +78,7 @@ export default function FormInput({ records, onSave }: FormInputProps) {
   
   // Form State
   const [formData, setFormData] = useState<LandRecord>(createEmptyRecord());
-  const [activeTab, setActiveTab] = useState<'lahan_pemilik' | 'alas_bangunan' | 'tanaman' | 'administrasi'>('lahan_pemilik');
+  const [activeTab, setActiveTab] = useState<'lahan_pemilik' | 'alas_bangunan' | 'tanaman' | 'administrasi' | 'cetak_unggah'>('lahan_pemilik');
   
   // Validation errors
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
@@ -267,23 +279,27 @@ export default function FormInput({ records, onSave }: FormInputProps) {
 
       await onSave(formData, isEdit);
       
+      // Keep the saved record loaded so they can print/upload immediately
+      const savedRecord = JSON.parse(JSON.stringify(formData));
+      if (!savedRecord.ID_UNIK) {
+        const found = records.find(r => r.CODE === formData.CODE);
+        if (found) {
+          savedRecord.ID_UNIK = found.ID_UNIK;
+        } else {
+          savedRecord.ID_UNIK = `TEMP_${Date.now()}`;
+        }
+      }
+
       setSubmitMessage({
         type: 'success',
         text: isEdit 
-          ? `Data dengan CODE ${formData.CODE} berhasil diperbarui di Google Sheets!`
-          : `Data baru dengan CODE ${formData.CODE} berhasil ditambahkan ke Google Sheets!`
+          ? `Data dengan CODE ${formData.CODE} berhasil diperbarui di Google Sheets! Anda dapat melihat hasil dan mengunggah dokumen di tab "Cetak & Unggah" di bawah.`
+          : `Data baru dengan CODE ${formData.CODE} berhasil ditambahkan! Anda sekarang dapat langsung mencetak Formulir Inventarisasi atau mengunggah berkas di tab "Cetak & Unggah" di bawah.`
       });
 
-      // Reset form if new submission
-      if (!isEdit) {
-        setFormData(createEmptyRecord());
-        setActivePlantsCount(1);
-      } else {
-        setSelectedEditRecord(null);
-        setFormData(createEmptyRecord());
-      }
-      
-      setActiveTab('lahan_pemilik');
+      setSelectedEditRecord(savedRecord);
+      setFormData(JSON.parse(JSON.stringify(savedRecord)));
+      setActiveTab('cetak_unggah');
     } catch (err: any) {
       setSubmitMessage({
         type: 'error',
@@ -532,18 +548,19 @@ export default function FormInput({ records, onSave }: FormInputProps) {
           </div>
         )}
 
-        {/* Form Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
+        <div className="p-6 space-y-6">
           {/* Automatically Generated CODE View */}
-          <div className="bg-white/5 p-4 rounded-xl border border-white/5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-            <div>
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Kode Pengenal (CODE)</span>
-              <p className="text-xs text-slate-400 mt-0.5">Dihasilkan otomatis dari gabungan DESA, SPAN, dan NOBID.</p>
+          {activeTab !== 'cetak_unggah' && (
+            <div className="bg-white/5 p-4 rounded-xl border border-white/5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+              <div>
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Kode Pengenal (CODE)</span>
+                <p className="text-xs text-slate-400 mt-0.5">Dihasilkan otomatis dari gabungan DESA, SPAN, dan NOBID.</p>
+              </div>
+              <span className="text-base font-bold font-mono text-white bg-slate-900 border border-white/10 px-4 py-2 rounded-xl">
+                {formData.CODE || 'BELUM LENGKAP (DESA/SPAN/NOBID)'}
+              </span>
             </div>
-            <span className="text-base font-bold font-mono text-white bg-slate-900 border border-white/10 px-4 py-2 rounded-xl">
-              {formData.CODE || 'BELUM LENGKAP (DESA/SPAN/NOBID)'}
-            </span>
-          </div>
+          )}
 
           {/* Form Navigation Tabs */}
           <div className="flex border-b border-white/10 overflow-x-auto scrollbar-none gap-1">
@@ -595,7 +612,22 @@ export default function FormInput({ records, onSave }: FormInputProps) {
               <Landmark className="w-4 h-4" />
               Administrasi & Status
             </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('cetak_unggah')}
+              className={`pb-3 px-4 text-xs font-bold border-b-2 tracking-wide uppercase transition-all flex items-center gap-2 shrink-0 cursor-pointer ${
+                activeTab === 'cetak_unggah' 
+                  ? 'border-indigo-400 text-indigo-300 font-extrabold' 
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              Cetak & Unggah Berkas
+            </button>
           </div>
+
+          {activeTab !== 'cetak_unggah' ? (
+            <form onSubmit={handleSubmit} className="space-y-6">
 
           {/* Form Content - TAB 1: LAHAN & PEMILIK */}
           {activeTab === 'lahan_pemilik' && (
@@ -1402,7 +1434,40 @@ export default function FormInput({ records, onSave }: FormInputProps) {
             </div>
           )}
         </form>
-      </div>
+      ) : (
+        <div className="space-y-6 animate-fadeIn">
+          {selectedEditRecord ? (
+            accessToken ? (
+              <DocUpload
+                records={records}
+                accessToken={accessToken}
+                onUpdateRecord={onUpdateRecord || (async () => {})}
+                uploadsFolderId={uploadsFolderId}
+                activeProjectName={activeProjectName}
+                preselectedRecordId={selectedEditRecord.ID_UNIK}
+              />
+            ) : (
+              <div className="p-8 bg-slate-900/50 border border-white/5 rounded-2xl text-center space-y-4">
+                <ShieldAlert className="w-8 h-8 text-indigo-400 mx-auto" />
+                <h3 className="text-sm font-bold text-white">Koneksi Google Drive Belum Aktif</h3>
+                <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                  Hubungkan Google Drive Anda menggunakan tombol <strong>Hubungkan Drive</strong> di bagian atas layar untuk mengaktifkan cetak dokumen resmi dan unggah lampiran berkas langsung ke Google Drive.
+                </p>
+              </div>
+            )
+          ) : (
+            <div className="p-10 bg-slate-900/40 rounded-2xl border border-white/5 text-center space-y-4">
+              <ShieldAlert className="w-8 h-8 text-indigo-400 mx-auto" />
+              <h3 className="text-sm font-bold text-white">Data Lahan Belum Dipilih / Dimuat</h3>
+              <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                Silakan cari dan muat data lahan terlebih dahulu menggunakan panel pencarian di bagian atas, atau simpan data lahan baru untuk mencetak Formulir Inventarisasi resmi (PDF) atau mengunggah lampiran berkas ke Google Drive.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
+  </div>
+</div>
   );
 }

@@ -5,6 +5,8 @@ import {
   XCircle, MapPin, Search, FileText, ChevronRight, Eye, Trash2, HelpCircle, X
 } from 'lucide-react';
 import type { LandRecord } from '../types';
+import { db } from '../lib/firebase';
+import { collection, getDocs, deleteDoc, doc, setDoc } from 'firebase/firestore';
 
 interface InteractiveMapProps {
   records: LandRecord[];
@@ -169,32 +171,6 @@ const isRecordMatched = (
   return true;
 };
 
-const saveCustomGeoJSONToLocalStorage = (name: string, type: 'bidang' | 'jalur' | 'tower', data: any) => {
-  try {
-    const saved = localStorage.getItem('gis_custom_geojson_layers');
-    const list = saved ? JSON.parse(saved) : [];
-    if (!list.some((item: any) => item.name === name)) {
-      list.push({ name, type, data });
-      localStorage.setItem('gis_custom_geojson_layers', JSON.stringify(list));
-    }
-  } catch (err) {
-    console.warn('Gagal menyimpan GeoJSON ke localStorage:', err);
-  }
-};
-
-const removeCustomGeoJSONFromLocalStorage = (name: string) => {
-  try {
-    const saved = localStorage.getItem('gis_custom_geojson_layers');
-    if (saved) {
-      const list = JSON.parse(saved);
-      const filtered = list.filter((item: any) => item.name !== name);
-      localStorage.setItem('gis_custom_geojson_layers', JSON.stringify(filtered));
-    }
-  } catch (err) {
-    // ignore
-  }
-};
-
 export default function InteractiveMap({ records, role, activeProjectName, activeProjectId }: InteractiveMapProps) {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -292,18 +268,19 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
     tileLayers.current = { osm, satelit, google };
     mapRef.current = map;
 
-    // Restore custom layers from browser localStorage once on mount
-    try {
-      const saved = localStorage.getItem('gis_custom_geojson_layers');
-      if (saved) {
-        const list = JSON.parse(saved);
-        list.forEach((item: any) => {
-          handleAddGeoJSON(item.data, item.name, item.type, false); // false so they are treated as custom layers (not deleted on project switch)
+    // Restore custom layers from Firestore once on mount
+    const loadCustomGeoJSONsFromFirestore = async () => {
+      try {
+        const querySnapshot = await getDocs(collection(db, 'geojson_layers'));
+        querySnapshot.forEach((docSnap) => {
+          const item = docSnap.data();
+          handleAddGeoJSON(item.data, item.name, item.type, false, docSnap.id);
         });
+      } catch (err) {
+        console.warn('Gagal memuat GeoJSON dari Firestore:', err);
       }
-    } catch (err) {
-      // ignore
-    }
+    };
+    loadCustomGeoJSONsFromFirestore();
 
     return () => {
       if (mapRef.current) {
@@ -468,8 +445,14 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
   };
 
   // Helper to trigger highlights and updates when map GeoJSON layers are loaded/interacted with
-  const handleAddGeoJSON = (data: any, name: string, type: 'bidang' | 'jalur' | 'tower', isDefault: boolean = false) => {
-    const id = `${type}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const handleAddGeoJSON = async (
+    data: any, 
+    name: string, 
+    type: 'bidang' | 'jalur' | 'tower', 
+    isDefault: boolean = false, 
+    existingId?: string
+  ) => {
+    const id = existingId || `${type}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const newLayer: LoadedGeoJSON = { id, name, type, data, visible: true, isDefault };
     
     setLoadedGeoJSONs(prev => {
@@ -478,16 +461,30 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
       return [...prev, newLayer];
     });
 
-    if (!isDefault) {
-      saveCustomGeoJSONToLocalStorage(name, type, data);
+    if (!isDefault && !existingId) {
+      try {
+        await setDoc(doc(db, 'geojson_layers', id), {
+          name,
+          type,
+          data,
+          projectId: activeProjectId || 'global',
+          createdAt: new Date().toISOString()
+        });
+      } catch (err) {
+        console.error('Gagal menyimpan GeoJSON ke Firestore:', err);
+      }
     }
   };
 
   // Function to remove a GeoJSON layer from the map and state
-  const handleRemoveGeoJSON = (id: string) => {
+  const handleRemoveGeoJSON = async (id: string) => {
     const layer = loadedGeoJSONs.find(g => g.id === id);
-    if (layer) {
-      removeCustomGeoJSONFromLocalStorage(layer.name);
+    if (layer && !layer.isDefault) {
+      try {
+        await deleteDoc(doc(db, 'geojson_layers', id));
+      } catch (err) {
+        console.error('Gagal menghapus GeoJSON dari Firestore:', err);
+      }
     }
     if (mapRef.current && geojsonLayersRef.current[id]) {
       mapRef.current.removeLayer(geojsonLayersRef.current[id]);

@@ -34,51 +34,75 @@ export function generateInventoryPDF(record: LandRecord, projectName: string): j
   // Helper function to draw the elegant corporate header on both pages
   const drawPageHeader = (pNum: number) => {
     // 1. Danantara Indonesia Logo (Left side)
-    // Draw red & black elegant geometric triangles
-    doc.setFillColor(accentRed[0], accentRed[1], accentRed[2]);
-    doc.triangle(15, 12, 19, 12, 15, 17, 'F');
-    doc.setFillColor(darkSlate[0], darkSlate[1], darkSlate[2]);
-    doc.triangle(19, 12, 23, 12, 19, 17, 'F');
-    doc.setFillColor(accentRed[0], accentRed[1], accentRed[2]);
-    doc.triangle(17, 14, 21, 14, 17, 19, 'F');
+    // Draw a premium gold & crimson corporate crest
+    doc.setFillColor(178, 34, 34); // Crimson
+    doc.rect(15, 11, 4, 8, 'F');
+    doc.setFillColor(212, 175, 55); // Gold
+    doc.rect(19, 11, 2, 8, 'F');
+    doc.setFillColor(15, 23, 42); // Dark slate
+    doc.rect(21, 11, 1, 8, 'F');
+    
+    // Draw stylized layered triangles (crown/crest) above
+    doc.setFillColor(178, 34, 34);
+    doc.triangle(15, 11, 19, 11, 17, 8, 'F');
+    doc.setFillColor(212, 175, 55);
+    doc.triangle(19, 11, 21, 11, 20, 8, 'F');
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9.5);
-    doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
-    doc.text('Danantara', 25, 14);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9.5);
-    doc.text('Indonesia', 25, 18);
-
-    // 2. ID Survey Logo (Middle)
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10.5);
-    doc.setTextColor(primaryBlue[0], primaryBlue[1], primaryBlue[2]);
-    doc.text('ID Survey', 105, 14, { align: 'center' });
-    
-    // Draw small green check accent under ID Survey text
-    doc.setDrawColor(tealAccent[0], tealAccent[1], tealAccent[2]);
-    doc.setLineWidth(0.45);
-    doc.line(100, 16, 103, 18);
-    doc.line(103, 18, 110, 15);
-    
+    doc.setFontSize(9);
+    doc.setTextColor(15, 23, 42);
+    doc.text('DANANTARA', 24, 14);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
     doc.setTextColor(100, 116, 139);
-    doc.text('Testing · Inspection · Certification', 105, 21, { align: 'center' });
+    doc.text('REPUBLIK INDONESIA', 24, 18);
+
+    // 2. ID Survey Logo (Middle)
+    // Draw a modern holding icon: circle enclosing checkmark
+    doc.setFillColor(2, 132, 199); // Blue
+    doc.circle(92, 13.5, 3, 'F');
+    doc.setFillColor(255, 255, 255); // white punch hole
+    doc.circle(92, 13.5, 1.8, 'F');
+    
+    // Green check mark on top
+    doc.setDrawColor(16, 185, 129); // Green
+    doc.setLineWidth(0.6);
+    doc.line(91.5, 13.5, 92.5, 14.5);
+    doc.line(92.5, 14.5, 94.5, 12.5);
+
+    // ID Survey Typography
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(15, 23, 42);
+    doc.text('id', 97, 15);
+    doc.setFont('helvetica', 'normal');
+    doc.text('survey', 100.5, 15);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Testing · Inspection · Certification', 105, 19, { align: 'center' });
 
     // 3. Surveyor Indonesia Logo (Right side)
-    // Small globe-like blue lines
-    doc.setDrawColor(primaryBlue[0], primaryBlue[1], primaryBlue[2]);
-    doc.setLineWidth(0.3);
-    doc.circle(185, 14, 3.5, 'S');
-    doc.line(181.5, 14, 188.5, 14);
-    doc.line(185, 10.5, 185, 17.5);
+    const xRight = 171;
+    // Draw globe icon with latitude/longitude lines
+    doc.setDrawColor(2, 132, 199); // Blue
+    doc.setLineWidth(0.2);
+    doc.circle(xRight - 4, 14, 3, 'S'); // Outer circle
+    doc.ellipse(xRight - 4, 14, 1.2, 3, 'S'); // Longitude arc
+    doc.line(xRight - 7, 14, xRight - 1, 14); // Equator
     
+    // Add corporate brand name
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(primaryBlue[0], primaryBlue[1], primaryBlue[2]);
-    doc.text('SURVEYOR INDONESIA', 185, 20, { align: 'center' });
+    doc.setFontSize(7);
+    doc.setTextColor(2, 132, 199); // Brand Blue
+    doc.text('SURVEYOR', xRight + 1, 13);
+    doc.text('INDONESIA', xRight + 1, 16);
+    
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Member of ID Survey', xRight + 1, 19);
     
     // Header bottom line
     doc.setDrawColor(borderGray[0], borderGray[1], borderGray[2]);

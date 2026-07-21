@@ -2342,7 +2342,14 @@ export default function App() {
                 )}
                 
                 {activeMenu === 'input' && role !== 'GUEST' && (
-                  <FormInput records={records} onSave={handleSaveRecord} />
+                  <FormInput 
+                    records={records} 
+                    onSave={handleSaveRecord} 
+                    accessToken={token!} 
+                    onUpdateRecord={handleUpdateRecord} 
+                    uploadsFolderId={projectUploadsFolderId || undefined}
+                    activeProjectName={projects.find(p => p.id === activeProjectId)?.name}
+                  />
                 )}
                 
                 {activeMenu === 'upload' && role !== 'GUEST' && (

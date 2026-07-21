@@ -34,5 +34,13 @@ service cloud.firestore {
       // Only authenticated users can read and write registered operators
       allow read, write: if request.auth != null;
     }
+
+    // geojson_layers collection
+    match /geojson_layers/{layerId} {
+      // Allow anyone (even unauthenticated guests) to read custom layers
+      allow read: if true;
+      // Allow authenticated users to write/delete custom layers
+      allow write: if request.auth != null;
+    }
   }
 }

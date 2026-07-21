@@ -14,6 +14,7 @@ interface DocUploadProps {
   onUpdateRecord: (updatedRecord: LandRecord) => Promise<void>;
   uploadsFolderId?: string;
   activeProjectName?: string;
+  preselectedRecordId?: string | null;
 }
 
 type DocType = 
@@ -40,10 +41,23 @@ interface DocTypeConfig {
   docType: DocType;
 }
 
-export default function DocUpload({ records, accessToken, onUpdateRecord, uploadsFolderId, activeProjectName }: DocUploadProps) {
+export default function DocUpload({ 
+  records, 
+  accessToken, 
+  onUpdateRecord, 
+  uploadsFolderId, 
+  activeProjectName,
+  preselectedRecordId = null
+}: DocUploadProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(preselectedRecordId || null);
   const [isSavingPDFToDrive, setIsSavingPDFToDrive] = useState(false);
+
+  useEffect(() => {
+    if (preselectedRecordId) {
+      setSelectedRecordId(preselectedRecordId);
+    }
+  }, [preselectedRecordId]);
   
   // Search state for cascading dropdowns
   const [searchMethod, setSearchMethod] = useState<'dropdown' | 'manual'>('dropdown');
@@ -303,173 +317,175 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6" id="sip_doc_upload">
       {/* Left panel: List of land records to select */}
-      <div className="lg:col-span-4 glass-card p-5 rounded-2xl shadow-xl flex flex-col h-[600px]">
-        <div>
-          <h2 className="text-md font-bold text-white tracking-tight flex items-center gap-1.5">
-            <FolderOpen className="w-5 h-5 text-indigo-400" />
-            Daftar Berkas Lahan
-          </h2>
-          <p className="text-xs text-slate-400 mt-0.5">Pilih salah satu kode lahan di bawah untuk melengkapi berkas lampiran.</p>
-        </div>
+      {!preselectedRecordId && (
+        <div className="lg:col-span-4 glass-card p-5 rounded-2xl shadow-xl flex flex-col h-[600px]">
+          <div>
+            <h2 className="text-md font-bold text-white tracking-tight flex items-center gap-1.5">
+              <FolderOpen className="w-5 h-5 text-indigo-400" />
+              Daftar Berkas Lahan
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">Pilih salah satu kode lahan di bawah untuk melengkapi berkas lampiran.</p>
+          </div>
 
-        {/* Search Method Toggle Tabs */}
-        <div className="flex gap-1.5 border-b border-white/5 pb-2 mt-4">
-          <button
-            type="button"
-            onClick={() => setSearchMethod('dropdown')}
-            className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
-              searchMethod === 'dropdown'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
-            }`}
-          >
-            <MapPin className="w-3.5 h-3.5" />
-            Dropdown
-          </button>
-          <button
-            type="button"
-            onClick={() => setSearchMethod('manual')}
-            className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
-              searchMethod === 'manual'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
-            }`}
-          >
-            <Search className="w-3.5 h-3.5" />
-            Manual
-          </button>
-        </div>
+          {/* Search Method Toggle Tabs */}
+          <div className="flex gap-1.5 border-b border-white/5 pb-2 mt-4">
+            <button
+              type="button"
+              onClick={() => setSearchMethod('dropdown')}
+              className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                searchMethod === 'dropdown'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              <MapPin className="w-3.5 h-3.5" />
+              Dropdown
+            </button>
+            <button
+              type="button"
+              onClick={() => setSearchMethod('manual')}
+              className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                searchMethod === 'manual'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              <Search className="w-3.5 h-3.5" />
+              Manual
+            </button>
+          </div>
 
-        {/* Search Input / Cascading Dropdowns */}
-        <div className="space-y-2 mt-3 mb-4">
-          {searchMethod === 'dropdown' ? (
-            <div className="space-y-2.5">
-              {/* Select DESA */}
-              <div>
-                <select
-                  value={selectedDesa}
-                  onChange={(e) => setSelectedDesa(e.target.value)}
-                  className="w-full px-2.5 py-2 bg-slate-900 border border-white/10 rounded-xl text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 cursor-pointer"
-                >
-                  <option value="">-- 1. Pilih Desa --</option>
-                  {uniqueDesas.map(desa => (
-                    <option key={desa} value={desa}>{desa}</option>
-                  ))}
-                </select>
+          {/* Search Input / Cascading Dropdowns */}
+          <div className="space-y-2 mt-3 mb-4">
+            {searchMethod === 'dropdown' ? (
+              <div className="space-y-2.5">
+                {/* Select DESA */}
+                <div>
+                  <select
+                    value={selectedDesa}
+                    onChange={(e) => setSelectedDesa(e.target.value)}
+                    className="w-full px-2.5 py-2 bg-slate-900 border border-white/10 rounded-xl text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 cursor-pointer"
+                  >
+                    <option value="">-- 1. Pilih Desa --</option>
+                    {uniqueDesas.map(desa => (
+                      <option key={desa} value={desa}>{desa}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Select SPAN */}
+                <div>
+                  <select
+                    value={selectedSpan}
+                    onChange={(e) => setSelectedSpan(e.target.value)}
+                    disabled={!selectedDesa}
+                    className="w-full px-2.5 py-2 bg-slate-900 border border-white/10 rounded-xl text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <option value="">{selectedDesa ? '-- 2. Pilih Span --' : '-- 2. Pilih Desa Dulu --'}</option>
+                    {uniqueSpansForDesa.map(span => (
+                      <option key={span} value={span}>{span}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Select NOBID */}
+                <div>
+                  <select
+                    value={selectedNobid}
+                    onChange={(e) => setSelectedNobid(e.target.value)}
+                    disabled={!selectedSpan}
+                    className="w-full px-2.5 py-2 bg-slate-900 border border-white/10 rounded-xl text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <option value="">{selectedSpan ? '-- 3. Pilih No. Bidang --' : '-- 3. Pilih Span Dulu --'}</option>
+                    {uniqueNobidsForDesaAndSpan.map(nobid => (
+                      <option key={nobid} value={nobid}>{nobid}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Reset Dropdown Selection if anything chosen */}
+                {(selectedDesa || selectedSpan || selectedNobid) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedDesa('');
+                      setSelectedSpan('');
+                      setSelectedNobid('');
+                    }}
+                    className="w-full py-1 bg-white/5 hover:bg-rose-500/10 hover:text-rose-300 text-[10px] font-bold text-slate-400 rounded-lg border border-white/5 transition-all cursor-pointer"
+                  >
+                    Bersihkan Filter Dropdown
+                  </button>
+                )}
               </div>
-
-              {/* Select SPAN */}
-              <div>
-                <select
-                  value={selectedSpan}
-                  onChange={(e) => setSelectedSpan(e.target.value)}
-                  disabled={!selectedDesa}
-                  className="w-full px-2.5 py-2 bg-slate-900 border border-white/10 rounded-xl text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  <option value="">{selectedDesa ? '-- 2. Pilih Span --' : '-- 2. Pilih Desa Dulu --'}</option>
-                  {uniqueSpansForDesa.map(span => (
-                    <option key={span} value={span}>{span}</option>
-                  ))}
-                </select>
+            ) : (
+              <div className="relative">
+                <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  <Search className="w-4 h-4" />
+                </span>
+                <input 
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Cari CODE atau Nama Pemilik..."
+                  className="w-full pl-9 pr-3 py-2.5 bg-slate-900/50 border border-white/10 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 text-white placeholder-slate-400 animate-fadeIn"
+                />
               </div>
+            )}
+          </div>
 
-              {/* Select NOBID */}
-              <div>
-                <select
-                  value={selectedNobid}
-                  onChange={(e) => setSelectedNobid(e.target.value)}
-                  disabled={!selectedSpan}
-                  className="w-full px-2.5 py-2 bg-slate-900 border border-white/10 rounded-xl text-[11px] text-slate-200 font-semibold focus:outline-none focus:border-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  <option value="">{selectedSpan ? '-- 3. Pilih No. Bidang --' : '-- 3. Pilih Span Dulu --'}</option>
-                  {uniqueNobidsForDesaAndSpan.map(nobid => (
-                    <option key={nobid} value={nobid}>{nobid}</option>
-                  ))}
-                </select>
+          {/* List scroll */}
+          <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 scrollbar-thin">
+            {filteredRecords.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-slate-400 text-xs italic">
+                Tidak ada data pertanahan ditemukan
               </div>
-
-              {/* Reset Dropdown Selection if anything chosen */}
-              {(selectedDesa || selectedSpan || selectedNobid) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedDesa('');
-                    setSelectedSpan('');
-                    setSelectedNobid('');
-                  }}
-                  className="w-full py-1 bg-white/5 hover:bg-rose-500/10 hover:text-rose-300 text-[10px] font-bold text-slate-400 rounded-lg border border-white/5 transition-all cursor-pointer"
-                >
-                  Bersihkan Filter Dropdown
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="relative">
-              <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                <Search className="w-4 h-4" />
-              </span>
-              <input 
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Cari CODE atau Nama Pemilik..."
-                className="w-full pl-9 pr-3 py-2.5 bg-slate-900/50 border border-white/10 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 text-white placeholder-slate-400 animate-fadeIn"
-              />
-            </div>
-          )}
+            ) : (
+              filteredRecords.map((r, idx) => {
+                const isSelected = r.ID_UNIK === selectedRecordId;
+                // Check how many documents have links
+                const docCount = [
+                  r.LINK_KTP, r.LINK_KK, r.LINK_ALAS_HAK, r.LINK_PERALIHAN_HAK,
+                  r.LINK_JUAL_BELI, r.LINK_KETERANGAN_WARIS, r.LINK_KUASA_WARIS,
+                  r.LINK_SURAT_KUASA, r.LINK_KET_BEDA_NAMA, r.LINK_WAKAF,
+                  r.LINK_KLAIM_TANAMAN, r.LINK_KLAIM_BANGUNAN, r.LINK_DOKUMEN_LAIN,
+                  r.LINK_DOKUMENTASI_BIDANG, r.LINK_WAJAH_PEMILIK
+                ].filter(Boolean).length;
+                
+                return (
+                  <button
+                    key={`${r.ID_UNIK || r.CODE || 'row'}-${idx}`}
+                    onClick={() => {
+                      setSelectedRecordId(r.ID_UNIK);
+                      setStatusMessage(null);
+                    }}
+                    className={`w-full text-left p-3 rounded-xl border text-xs transition-all flex justify-between items-center cursor-pointer ${
+                      isSelected 
+                        ? 'bg-indigo-500/15 border-indigo-500/30 ring-1 ring-indigo-500/30 text-white' 
+                        : 'bg-white/5 border-white/5 hover:bg-white/10 text-slate-300'
+                    }`}
+                  >
+                    <div className="space-y-1 truncate pr-2">
+                      <p className={`font-bold font-mono truncate ${isSelected ? 'text-indigo-200' : 'text-slate-300'}`}>{r.CODE}</p>
+                      <p className="text-slate-400 font-semibold truncate">{r.NAMA}</p>
+                    </div>
+                    <span className={`px-2 py-1 rounded-md text-[10px] font-bold shrink-0 ${
+                      docCount > 0 
+                        ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' 
+                        : 'bg-slate-900 text-slate-400 border border-white/5'
+                    }`}>
+                      {docCount} Berkas
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
         </div>
-
-        {/* List scroll */}
-        <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 scrollbar-thin">
-          {filteredRecords.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-slate-400 text-xs italic">
-              Tidak ada data pertanahan ditemukan
-            </div>
-          ) : (
-            filteredRecords.map((r, idx) => {
-              const isSelected = r.ID_UNIK === selectedRecordId;
-              // Check how many documents have links
-              const docCount = [
-                r.LINK_KTP, r.LINK_KK, r.LINK_ALAS_HAK, r.LINK_PERALIHAN_HAK,
-                r.LINK_JUAL_BELI, r.LINK_KETERANGAN_WARIS, r.LINK_KUASA_WARIS,
-                r.LINK_SURAT_KUASA, r.LINK_KET_BEDA_NAMA, r.LINK_WAKAF,
-                r.LINK_KLAIM_TANAMAN, r.LINK_KLAIM_BANGUNAN, r.LINK_DOKUMEN_LAIN,
-                r.LINK_DOKUMENTASI_BIDANG, r.LINK_WAJAH_PEMILIK
-              ].filter(Boolean).length;
-              
-              return (
-                <button
-                  key={`${r.ID_UNIK || r.CODE || 'row'}-${idx}`}
-                  onClick={() => {
-                    setSelectedRecordId(r.ID_UNIK);
-                    setStatusMessage(null);
-                  }}
-                  className={`w-full text-left p-3 rounded-xl border text-xs transition-all flex justify-between items-center cursor-pointer ${
-                    isSelected 
-                      ? 'bg-indigo-500/15 border-indigo-500/30 ring-1 ring-indigo-500/30 text-white' 
-                      : 'bg-white/5 border-white/5 hover:bg-white/10 text-slate-300'
-                  }`}
-                >
-                  <div className="space-y-1 truncate pr-2">
-                    <p className={`font-bold font-mono truncate ${isSelected ? 'text-indigo-200' : 'text-slate-300'}`}>{r.CODE}</p>
-                    <p className="text-slate-400 font-semibold truncate">{r.NAMA}</p>
-                  </div>
-                  <span className={`px-2 py-1 rounded-md text-[10px] font-bold shrink-0 ${
-                    docCount > 0 
-                      ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' 
-                      : 'bg-slate-900 text-slate-400 border border-white/5'
-                  }`}>
-                    {docCount} Berkas
-                  </span>
-                </button>
-              );
-            })
-          )}
-        </div>
-      </div>
+      )}
 
       {/* Right panel: Active upload view */}
-      <div className="lg:col-span-8 glass-card p-6 rounded-2xl shadow-xl flex flex-col justify-between min-h-[600px]">
+      <div className={`${preselectedRecordId ? 'lg:col-span-12' : 'lg:col-span-8'} glass-card p-6 rounded-2xl shadow-xl flex flex-col justify-between min-h-[600px]`}>
         {selectedRecord ? (
           <div className="space-y-6 flex-1 flex flex-col justify-between">
             {/* Upper details of selection */}
