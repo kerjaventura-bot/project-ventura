@@ -2351,6 +2351,7 @@ export default function App() {
                     accessToken={token!} 
                     onUpdateRecord={handleUpdateRecord} 
                     uploadsFolderId={projectUploadsFolderId || undefined}
+                    activeProjectName={projects.find(p => p.id === activeProjectId)?.name}
                   />
                 )}
                 

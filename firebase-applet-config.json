@@ -1,9 +1,9 @@
 {
-  "projectId": "ventura-project",
-  "appId": "1:347786932589:web:0714cdf03f9119f6a66a64",
-  "apiKey": "AIzaSyD0UWDT_uC5A801-TBP-_IdCoIE2CyK5gI",
-  "authDomain": "ventura-project.firebaseapp.com",
-  "storageBucket": "ventura-project.firebasestorage.app",
-  "messagingSenderId": "347786932589",
-  "measurementId": "G-QT08DLQ1MT"
+  "projectId": "proyek-ventura",
+  "appId": "1:432144666992:web:580eefc81162c114e7ffb5",
+  "apiKey": "AIzaSyA1nop3w0O3bqgLWhGixkLYpgRtWq5GNyU",
+  "authDomain": "proyek-ventura.firebaseapp.com",
+  "storageBucket": "proyek-ventura.firebasestorage.app",
+  "messagingSenderId": "432144666992",
+  "measurementId": "G-H7HKX09ELS"
 }

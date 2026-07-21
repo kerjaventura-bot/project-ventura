@@ -1,16 +1,19 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   FileText, Upload, CheckCircle2, AlertCircle, ExternalLink, 
-  Search, Loader2, FolderOpen, Info, ShieldAlert, MapPin, Check 
+  Search, Loader2, FolderOpen, Info, ShieldAlert, MapPin, Check,
+  FileDown, Cloud
 } from 'lucide-react';
 import { type LandRecord } from '../types';
 import { findOrCreateFolder, uploadFileToDrive } from '../lib/googleApi';
+import { generateInventoryPDF } from '../lib/pdfGenerator';
 
 interface DocUploadProps {
   records: LandRecord[];
   accessToken: string;
   onUpdateRecord: (updatedRecord: LandRecord) => Promise<void>;
   uploadsFolderId?: string;
+  activeProjectName?: string;
 }
 
 type DocType = 
@@ -37,9 +40,10 @@ interface DocTypeConfig {
   docType: DocType;
 }
 
-export default function DocUpload({ records, accessToken, onUpdateRecord, uploadsFolderId }: DocUploadProps) {
+export default function DocUpload({ records, accessToken, onUpdateRecord, uploadsFolderId, activeProjectName }: DocUploadProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+  const [isSavingPDFToDrive, setIsSavingPDFToDrive] = useState(false);
   
   // Search state for cascading dropdowns
   const [searchMethod, setSearchMethod] = useState<'dropdown' | 'manual'>('dropdown');
@@ -228,6 +232,71 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
       setUploadingType(null);
       // Reset input value
       event.target.value = '';
+    }
+  };
+
+  const handleDownloadPDFDirectly = () => {
+    if (!selectedRecord) return;
+    try {
+      const docInstance = generateInventoryPDF(selectedRecord, activeProjectName || "KOMPENSASI JALUR TRANSMISI");
+      docInstance.save(`FORMULIR_INVENTARISASI_${selectedRecord.CODE.replace(/[\/\\?%*:|"<>\s]/g, '_')}.pdf`);
+      setStatusMessage({
+        type: 'success',
+        text: `Formulir Inventarisasi untuk ${selectedRecord.CODE} berhasil diunduh ke komputer Anda!`
+      });
+    } catch (err: any) {
+      console.error(err);
+      setStatusMessage({
+        type: 'error',
+        text: `Gagal mengunduh PDF: ${err.message}`
+      });
+    }
+  };
+
+  const handleSavePDFToDrive = async () => {
+    if (!selectedRecord) return;
+    setIsSavingPDFToDrive(true);
+    setStatusMessage(null);
+    try {
+      // 1. Generate PDF blob
+      const docInstance = generateInventoryPDF(selectedRecord, activeProjectName || "KOMPENSASI JALUR TRANSMISI");
+      const pdfBlob = docInstance.output('blob');
+      const pdfFile = new File([pdfBlob], `FORMULIR_INVENTARISASI_${selectedRecord.CODE.replace(/[\/\\?%*:|"<>\s]/g, '_')}.pdf`, { type: 'application/pdf' });
+
+      // 2. Find or create folders in Drive
+      const mainFolderId = uploadsFolderId || await findOrCreateFolder(accessToken, "SIP_Berkas_Pertanahan_Desa");
+      let subFolderId = selectedRecord.DRIVE_FOLDER_ID;
+      if (!subFolderId) {
+        const subFolderName = selectedRecord.CODE.replace(/[\/\\?%*:|"<>\s]/g, '-');
+        subFolderId = await findOrCreateFolder(accessToken, subFolderName, mainFolderId, selectedRecord.ID_UNIK);
+      }
+
+      // 3. Upload file to Google Drive subfolder
+      await uploadFileToDrive(
+        accessToken,
+        pdfFile,
+        "FORMULIR_INVENTARISASI",
+        selectedRecord.CODE,
+        subFolderId
+      );
+
+      // 4. Update parent records to ensure DRIVE_FOLDER_ID is saved
+      const updatedRecord = { ...selectedRecord };
+      updatedRecord.DRIVE_FOLDER_ID = subFolderId;
+      await onUpdateRecord(updatedRecord);
+
+      setStatusMessage({
+        type: 'success',
+        text: `Formulir Inventarisasi resmi berhasil diproduksi dan diunggah langsung ke Google Drive di dalam folder ${selectedRecord.CODE}!`
+      });
+    } catch (err: any) {
+      console.error(err);
+      setStatusMessage({
+        type: 'error',
+        text: err.message || 'Gagal menyimpan Formulir Inventarisasi ke Google Drive. Periksa izin akses Drive.'
+      });
+    } finally {
+      setIsSavingPDFToDrive(false);
     }
   };
 
@@ -427,6 +496,60 @@ export default function DocUpload({ records, accessToken, onUpdateRecord, upload
                     <ExternalLink className="w-3.5 h-3.5 opacity-80" />
                   </a>
                 )}
+              </div>
+
+              {/* PRODUKSI FORMULIR INVENTARISASI (PDF) CARD */}
+              <div className="p-4 rounded-xl border border-indigo-500/20 bg-indigo-500/5 flex flex-col md:flex-row md:items-center justify-between gap-4 animate-fadeIn">
+                <div className="flex items-start gap-3">
+                  <div className="p-2.5 rounded-lg bg-indigo-500/10 text-indigo-400 mt-0.5">
+                    <FileText className="w-5 h-5 text-indigo-300" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white tracking-tight flex items-center gap-1.5">
+                      Cetak Formulir Inventarisasi Resmi (PDF)
+                      <span className="text-[8px] font-extrabold text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                        Bebas Kuota Firebase
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                      Format resmi 2 halaman (Data Jaringan, Pihak Berhak, Lahan, Bangunan, Tanaman, & Blok Tanda Tangan).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 self-end md:self-center">
+                  <button
+                    type="button"
+                    onClick={handleDownloadPDFDirectly}
+                    className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-bold rounded-xl border border-white/10 flex items-center gap-1.5 transition-all cursor-pointer shadow-xs active:scale-98"
+                  >
+                    <FileDown className="w-4 h-4 text-indigo-400" />
+                    Unduh PDF
+                  </button>
+                  
+                  <button
+                    type="button"
+                    onClick={handleSavePDFToDrive}
+                    disabled={isSavingPDFToDrive}
+                    className={`px-3.5 py-2 text-xs font-bold rounded-xl flex items-center gap-1.5 border transition-all cursor-pointer shadow-xs active:scale-98 ${
+                      isSavingPDFToDrive
+                        ? 'bg-slate-950 text-slate-500 border-white/5 cursor-not-allowed'
+                        : 'bg-indigo-600 hover:bg-indigo-500 text-white border-indigo-500/30'
+                    }`}
+                  >
+                    {isSavingPDFToDrive ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                        Menyimpan...
+                      </>
+                    ) : (
+                      <>
+                        <Cloud className="w-4 h-4 text-emerald-300" />
+                        Simpan ke Drive
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
 
               {/* Status Banner */}
