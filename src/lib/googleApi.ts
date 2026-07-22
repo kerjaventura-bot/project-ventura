@@ -5,6 +5,28 @@ export const SPREADSHEET_NAME = "Data_Pertanahan_Desa_SIP";
 export const MAIN_FOLDER_NAME = "SIP_Berkas_Pertanahan_Desa";
 
 /**
+ * Fetch wrapper with built-in timeout to prevent requests from hanging indefinitely
+ */
+export async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 10000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    return response;
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Koneksi Google API timeout (${timeoutMs / 1000} detik).`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+/**
  * Extracts and throws detailed error messages from Google API response bodies
  */
 async function handleResponseError(response: Response, defaultMessage: string): Promise<never> {
@@ -33,7 +55,7 @@ export async function findOrCreateSpreadsheet(accessToken: string, spreadsheetNa
     }
     const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
     
-    const response = await fetch(searchUrl, {
+    const response = await fetchWithTimeout(searchUrl, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     
@@ -55,7 +77,7 @@ export async function findOrCreateSpreadsheet(accessToken: string, spreadsheetNa
       body.parents = [parentFolderId];
     }
     
-    const createResponse = await fetch('https://www.googleapis.com/drive/v3/files', {
+    const createResponse = await fetchWithTimeout('https://www.googleapis.com/drive/v3/files', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -73,7 +95,7 @@ export async function findOrCreateSpreadsheet(accessToken: string, spreadsheetNa
     
     // Initialize headers in the first row
     const headers = getSheetHeaders();
-    const updateResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/A1?valueInputOption=USER_ENTERED`, {
+    const updateResponse = await fetchWithTimeout(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/A1?valueInputOption=USER_ENTERED`, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -134,9 +156,9 @@ export async function fetchSpreadsheetRecords(accessToken: string, spreadsheetId
   try {
     // Read from A1 to cover headers and all data rows
     const range = "A1:ZZ5000";
-    const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`, {
+    const response = await fetchWithTimeout(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`, {
       headers: { Authorization: `Bearer ${accessToken}` }
-    });
+    }, 12000);
     
     if (!response.ok) {
       await handleResponseError(response, "Gagal mengambil data dari spreadsheet");
@@ -321,7 +343,7 @@ export async function saveRecordToSpreadsheet(
       
       const range = `A${rowIndex}`;
       
-      const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`, {
+      const response = await fetchWithTimeout(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`, {
         method: 'PUT',
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -337,7 +359,7 @@ export async function saveRecordToSpreadsheet(
       }
     } else {
       // Append a new row
-      const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/A1:append?valueInputOption=USER_ENTERED`, {
+      const response = await fetchWithTimeout(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/A1:append?valueInputOption=USER_ENTERED`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -368,7 +390,8 @@ export async function findOrCreateFolder(
   idUnik?: string
 ): Promise<string> {
   try {
-    const parentQuery = parentId ? `'${parentId}' in parents` : "'root' in parents";
+    const validParentId = parentId && /^[a-zA-Z0-9_-]{15,60}$/.test(parentId.trim()) ? parentId.trim() : undefined;
+    const parentQuery = validParentId ? `'${validParentId}' in parents` : "'root' in parents";
     let query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and ${parentQuery} and trashed=false`;
     
     // If idUnik is provided, search by idUnik prefix instead of exact name to keep it persistent even after renames!
@@ -376,7 +399,7 @@ export async function findOrCreateFolder(
       query = `name contains '${idUnik}' and mimeType='application/vnd.google-apps.folder' and ${parentQuery} and trashed=false`;
     }
     
-    const response = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`, {
+    const response = await fetchWithTimeout(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     
@@ -393,7 +416,7 @@ export async function findOrCreateFolder(
       // If the folder name is outdated (e.g. they changed the display CODE), rename it on the fly!
       if (idUnik && currentName !== expectedName) {
         try {
-          await fetch(`https://www.googleapis.com/drive/v3/files/${folderId}`, {
+          await fetchWithTimeout(`https://www.googleapis.com/drive/v3/files/${folderId}`, {
             method: 'PATCH',
             headers: {
               Authorization: `Bearer ${accessToken}`,
@@ -410,7 +433,7 @@ export async function findOrCreateFolder(
     
     // Create the folder
     const finalFolderName = idUnik ? `${idUnik}_${folderName}` : folderName;
-    const createResponse = await fetch('https://www.googleapis.com/drive/v3/files', {
+    const createResponse = await fetchWithTimeout('https://www.googleapis.com/drive/v3/files', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -419,7 +442,7 @@ export async function findOrCreateFolder(
       body: JSON.stringify({
         name: finalFolderName,
         mimeType: 'application/vnd.google-apps.folder',
-        parents: parentId ? [parentId] : ['root']
+        parents: validParentId ? [validParentId] : ['root']
       })
     });
     
@@ -451,11 +474,17 @@ export async function uploadFileToDrive(
     const cleanCode = recordCode.replace(/[\/\\?%*:|"<>\s]/g, '-');
     const customFileName = `${docType}_${cleanCode}.${ext}`;
     
-    const metadata = {
+    // Validate folderId: must look like a valid Google Drive ID
+    const isValidFolderId = folderId && typeof folderId === 'string' && /^[a-zA-Z0-9_-]{15,60}$/.test(folderId.trim());
+    const validFolderId = isValidFolderId ? folderId.trim() : undefined;
+
+    const metadata: any = {
       name: customFileName,
       mimeType: file.type || 'application/pdf',
-      parents: [folderId]
     };
+    if (validFolderId) {
+      metadata.parents = [validFolderId];
+    }
 
     const boundary = 'sip_upload_boundary_delimiter';
     const delimiter = `\r\n--${boundary}\r\n`;
@@ -484,15 +513,39 @@ export async function uploadFileToDrive(
       base64Data +
       closeDelimiter;
 
-    const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+    let response = await fetchWithTimeout('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': `multipart/related; boundary=${boundary}`
       },
       body: multipartRequestBody
-    });
+    }, 15000);
     
+    if (!response.ok && validFolderId) {
+      // If upload failed (e.g. 404 Folder not found), retry uploading without parent folder!
+      console.warn("Upload with parent folder failed, retrying without parent folder...");
+      delete metadata.parents;
+      const retryBody =
+        delimiter +
+        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+        JSON.stringify(metadata) +
+        delimiter +
+        `Content-Type: ${file.type || 'application/pdf'}\r\n` +
+        'Content-Transfer-Encoding: base64\r\n\r\n' +
+        base64Data +
+        closeDelimiter;
+
+      response = await fetchWithTimeout('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`
+        },
+        body: retryBody
+      }, 15000);
+    }
+
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`Upload gagal: ${response.statusText} - ${errorText}`);

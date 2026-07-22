@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { 
   googleSignIn, logout, auth, setAccessToken, db
 } from './lib/firebase';
-import { doc, getDoc, setDoc, collection, addDoc, getDocs, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, addDoc, getDocs, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { 
-  findOrCreateSpreadsheet, fetchSpreadsheetRecords, saveRecordToSpreadsheet, setupProjectDriveStructure, findOrCreateFolder 
+  findOrCreateSpreadsheet, fetchSpreadsheetRecords, saveRecordToSpreadsheet, setupProjectDriveStructure, findOrCreateFolder, fetchWithTimeout 
 } from './lib/googleApi';
 import { type LandRecord, compareLandRecords, type OperatorConfig } from './types';
 import Dashboard from './components/Dashboard';
@@ -17,7 +17,7 @@ import {
   Map, Database, UploadCloud, ShieldAlert, LogOut, 
   RefreshCw, FileSpreadsheet, KeyRound, CheckSquare,
   Plus, User, UserCheck, Settings, Folder, Key, Eye, EyeOff, Lock, Unlock, Info, ShieldCheck, HelpCircle, Briefcase,
-  Pin, Menu, Clock, LayoutGrid, Sun, Moon, Copy, Users, ExternalLink
+  Pin, Menu, Clock, LayoutGrid, Sun, Moon, Copy, Users, ExternalLink, Layers, Trash2, X, Globe
 } from 'lucide-react';
 
 interface ProjectConfig {
@@ -76,6 +76,58 @@ function parseCSV(text: string): string[][] {
     result.push(row);
   }
   return result;
+}
+
+// Helper to transform Google Sheets URL to direct CSV export URL
+function formatGoogleCsvUrl(url: string): string {
+  if (!url) return url;
+  let clean = url.trim();
+  if (clean.includes('/pubhtml')) {
+    return clean.replace('/pubhtml', '/pub?output=csv');
+  }
+  if (clean.includes('docs.google.com/spreadsheets/d/')) {
+    const match = clean.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    if (match && match[1]) {
+      const spreadsheetId = match[1];
+      const gidMatch = clean.match(/[?&#]gid=([0-9]+)/);
+      const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : '';
+      if (!clean.includes('/pub?')) {
+        return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv${gidParam}`;
+      }
+    }
+  }
+  return clean;
+}
+
+// Resilient CSV fetch with timeout and CORS fallback
+async function fetchPublicCsvContent(url: string): Promise<string> {
+  const formattedUrl = formatGoogleCsvUrl(url);
+  try {
+    const res = await fetchWithTimeout(formattedUrl, { mode: 'cors' }, 8000);
+    if (res.ok) {
+      const text = await res.text();
+      if (text && !text.trim().startsWith('<!DOCTYPE') && !text.trim().startsWith('<html')) {
+        return text;
+      }
+    }
+  } catch (directErr) {
+    // Ignore direct fetch error
+  }
+
+  try {
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(formattedUrl)}`;
+    const res = await fetchWithTimeout(proxyUrl, {}, 8000);
+    if (res.ok) {
+      const text = await res.text();
+      if (text && !text.trim().startsWith('<!DOCTYPE') && !text.trim().startsWith('<html')) {
+        return text;
+      }
+    }
+  } catch (proxyErr) {
+    // Ignore proxy error
+  }
+
+  throw new Error("Tautan CSV publik tidak dapat diakses (CORS atau URL tidak valid)");
 }
 
 import { rowToRecord } from './types';
@@ -175,7 +227,7 @@ export default function App() {
   const [records, setRecords] = useState<LandRecord[]>([]);
   const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
   const [projectUploadsFolderId, setProjectUploadsFolderId] = useState<string | null>(null);
-  const [activeMenu, setActiveMenu] = useState<'dashboard' | 'input' | 'upload' | 'qc' | 'map' | 'logs' | 'project'>('dashboard');
+  const [activeMenu, setActiveMenu] = useState<'dashboard' | 'input' | 'qc' | 'map' | 'logs' | 'project'>('dashboard');
   
   // Sidebar state
   const [isSidebarPinned, setIsSidebarPinned] = useState<boolean>(() => {
@@ -214,10 +266,23 @@ export default function App() {
   const [editPublicCsvUrl, setEditPublicCsvUrl] = useState('');
   
   const [showBackupTools, setShowBackupTools] = useState(false);
-  const [projectSubTab, setProjectSubTab] = useState<'projects' | 'pins' | 'migration' | 'operators'>('projects');
+  const [projectSubTab, setProjectSubTab] = useState<'projects' | 'geojson' | 'operators' | 'pins' | 'migration'>('projects');
   const [backupJsonString, setBackupJsonString] = useState('');
   const [importStatus, setImportStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [importMessage, setImportMessage] = useState('');
+
+  // GeoJSON Layer State & Configuration for project management
+  const [loadedGeoJSONs, setLoadedGeoJSONs] = useState<any[]>([]);
+  const [configuringLayer, setConfiguringLayer] = useState<any | null>(null);
+  const [tempMapping, setTempMapping] = useState<{
+    desa?: string;
+    span?: string;
+    nobid?: string;
+    nama?: string;
+    tower?: string;
+    jalurName?: string;
+    rotasi?: string;
+  }>({});
 
   // Registered Operator specific states
   const [operators, setOperators] = useState<OperatorConfig[]>([]);
@@ -236,7 +301,7 @@ export default function App() {
   const [newOpUsername, setNewOpUsername] = useState('');
   const [newOpPassword, setNewOpPassword] = useState('');
   const [newOpName, setNewOpName] = useState('');
-  const [newOpRole, setNewOpRole] = useState<'FIELD' | 'QC'>('FIELD');
+  const [newOpRole, setNewOpRole] = useState<'ADMIN' | 'FIELD' | 'QC'>('FIELD');
   const [newOpProjectId, setNewOpProjectId] = useState('');
   const [operatorError, setOperatorError] = useState<string | null>(null);
 
@@ -409,6 +474,95 @@ export default function App() {
     return () => unsubscribe();
   }, [loadProjectsFromCloud, loadOperatorsFromCloud]);
 
+  // Helper to extract property keys from GeoJSON features for mapping
+  const getGeoJSONKeys = (geojson: any): string[] => {
+    if (!geojson || !geojson.features || !geojson.features.length) return [];
+    const keysSet = new Set<string>();
+    const sampleCount = Math.min(geojson.features.length, 15);
+    for (let i = 0; i < sampleCount; i++) {
+      const props = geojson.features[i].properties;
+      if (props) {
+        Object.keys(props).forEach(k => keysSet.add(k));
+      }
+    }
+    return Array.from(keysSet).sort();
+  };
+
+  // Real-time synchronization of custom GeoJSON layers from Firestore
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'geojson_layers'), (snapshot) => {
+      const layers: any[] = [];
+      snapshot.forEach((docSnap) => {
+        const item = docSnap.data();
+        layers.push({
+          id: docSnap.id,
+          name: item.name || '',
+          type: item.type || 'bidang',
+          data: item.data,
+          visible: item.visible !== undefined ? item.visible : true,
+          isDefault: false,
+          fieldMapping: item.fieldMapping || null
+        });
+      });
+      setLoadedGeoJSONs(layers);
+    }, (err) => {
+      console.warn('Error listening to geojson_layers collection in App:', err);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleAddGeoJSON = async (data: any, name: string, type: 'bidang' | 'jalur' | 'tower') => {
+    try {
+      const newId = `${type}_${Date.now()}`;
+      await setDoc(doc(db, 'geojson_layers', newId), {
+        name,
+        type,
+        data,
+        visible: true,
+        isDefault: false,
+        fieldMapping: null
+      });
+    } catch (err) {
+      console.warn('Gagal menyimpan GeoJSON ke Firestore:', err);
+    }
+  };
+
+  const handleToggleVisibility = async (id: string, visible: boolean) => {
+    try {
+      await setDoc(doc(db, 'geojson_layers', id), {
+        visible: !visible
+      }, { merge: true });
+    } catch (err) {
+      console.warn('Gagal mengubah visibilitas:', err);
+    }
+  };
+
+  const handleRemoveGeoJSON = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'geojson_layers', id));
+    } catch (err) {
+      console.warn('Gagal menghapus GeoJSON:', err);
+    }
+  };
+
+  const handleGeoJSONUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'bidang' | 'jalur' | 'tower') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+        const nameClean = file.name.replace(/\.[^/.]+$/, ""); // strip extension
+        handleAddGeoJSON(json, `${nameClean} (${type.toUpperCase()})`, type);
+      } catch (err) {
+        alert('File format salah! Pastikan mengunggah file .geojson yang valid.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
   // Handle SignIn action
   const handleLogin = async () => {
     setIsLoggingIn(true);
@@ -553,6 +707,8 @@ export default function App() {
       LINK_KLAIM_BANGUNAN: "",
       LINK_DOKUMEN_LAIN: "",
       LINK_DOKUMENTASI_BIDANG: "",
+      LINK_DOKUMENTASI_BIDANG_2: "",
+      LINK_DOKUMENTASI_BIDANG_3: "",
       LINK_WAJAH_PEMILIK: "",
       DRIVE_FOLDER_ID: "",
       BATAS_UTARA: "Sri Suyani",
@@ -593,11 +749,7 @@ export default function App() {
         if (activeProj.publicCsvUrl) {
           try {
             console.log("Fetching public CSV URL:", activeProj.publicCsvUrl);
-            const res = await fetch(activeProj.publicCsvUrl);
-            if (!res.ok) {
-              throw new Error(`HTTP error! status: ${res.status}`);
-            }
-            const csvText = await res.text();
+            const csvText = await fetchPublicCsvContent(activeProj.publicCsvUrl);
             const csvRows = parseCSV(csvText);
             
             if (csvRows.length > 1) {
@@ -622,7 +774,7 @@ export default function App() {
               return; // Success!
             }
           } catch (csvErr: any) {
-            console.error("Gagal mengambil data dari tautan Publik CSV, beralih ke cache lokal/cloud:", csvErr);
+            console.warn("Tautan Publik CSV tidak dapat diakses langsung, mengalihkan ke cache lokal/cloud:", csvErr);
             // Don't crash, fall back to localStorage cached data or Firestore
           }
         }
@@ -677,30 +829,41 @@ export default function App() {
       let sheetId = activeProj.spreadsheetId;
       let uploadsFolderId = activeProj.uploadsFolderId;
       
-      // If any is missing, automate creation in Drive under "PROJECT_VENTURA"
-      if (!folderId || !sheetId || !uploadsFolderId) {
-        const setup = await setupProjectDriveStructure(accessToken, activeProj.name);
-        folderId = setup.folderId;
-        sheetId = setup.spreadsheetId;
-        uploadsFolderId = setup.uploadsFolderId;
+      // Execute setup & fetch with a 10-second maximum timeout
+      const syncPromise = (async () => {
+        // If any is missing, automate creation in Drive under "PROJECT_VENTURA"
+        if (!folderId || !sheetId || !uploadsFolderId) {
+          const setup = await setupProjectDriveStructure(accessToken, activeProj.name);
+          folderId = setup.folderId;
+          sheetId = setup.spreadsheetId;
+          uploadsFolderId = setup.uploadsFolderId;
+          
+          // Save back to projects state and localStorage
+          const updatedProjects = projects.map(p => {
+            if (p.id === projectId) {
+              return { ...p, folderId, spreadsheetId: sheetId, uploadsFolderId };
+            }
+            return p;
+          });
+          setProjects(updatedProjects);
+          localStorage.setItem('project_ventura_projects', JSON.stringify(updatedProjects));
+          saveProjectsToCloud(updatedProjects);
+        }
         
-        // Save back to projects state and localStorage
-        const updatedProjects = projects.map(p => {
-          if (p.id === projectId) {
-            return { ...p, folderId, spreadsheetId: sheetId, uploadsFolderId };
-          }
-          return p;
-        });
-        setProjects(updatedProjects);
-        localStorage.setItem('project_ventura_projects', JSON.stringify(updatedProjects));
-        saveProjectsToCloud(updatedProjects);
-      }
-      
-      setSpreadsheetId(sheetId);
-      setProjectUploadsFolderId(uploadsFolderId);
-      
-      // Fetch all rows
-      const items = await fetchSpreadsheetRecords(accessToken, sheetId);
+        setSpreadsheetId(sheetId);
+        setProjectUploadsFolderId(uploadsFolderId);
+        
+        // Fetch all rows
+        const items = await fetchSpreadsheetRecords(accessToken, sheetId);
+        return { items, folderId, sheetId, uploadsFolderId };
+      })();
+
+      const timeoutPromise = new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('Koneksi Google Drive/Sheets timeout (10 detik). Mengalihkan ke data cadangan...')), 10000)
+      );
+
+      const { items } = await Promise.race([syncPromise, timeoutPromise]);
+
       const sortedItems = [...items].sort(compareLandRecords);
       setRecords(sortedItems);
       // Cache records in localStorage safely
@@ -714,7 +877,70 @@ export default function App() {
       setSheetNameInfo(activeProj.name);
     } catch (err: any) {
       console.error("Sync error:", err);
-      setDataError(err.message || 'Gagal menyinkronkan data proyek dengan Google Drive/Sheets. Periksa koneksi internet atau hak akses.');
+      
+      let loadedFromFallback = false;
+      const activeProj = projects.find(p => p.id === projectId);
+
+      // 1. Try Public CSV URL first
+      if (activeProj?.publicCsvUrl) {
+        try {
+          const csvText = await fetchPublicCsvContent(activeProj.publicCsvUrl);
+          const csvRows = parseCSV(csvText);
+          if (csvRows.length > 1) {
+            const dataRows = csvRows.slice(1);
+            const parsedRecords = dataRows
+              .filter(row => row && row.length > 0 && row[0] && row[0] !== 'CODE')
+              .map((row, idx) => {
+                const record = rowToRecord(row, idx);
+                record.rowNumber = idx + 2;
+                return record;
+              });
+            const sorted = [...parsedRecords].sort(compareLandRecords);
+            setRecords(sorted);
+            loadedFromFallback = true;
+          }
+        } catch (csvErr) {
+          console.warn("Gagal memuat dari Public CSV URL:", csvErr);
+        }
+      }
+
+      // 2. Try Firestore Cache
+      if (!loadedFromFallback) {
+        try {
+          const cacheRef = doc(db, 'records_cache', projectId);
+          const cacheSnap = await getDoc(cacheRef);
+          if (cacheSnap.exists()) {
+            const cacheData = cacheSnap.data();
+            if (cacheData && Array.isArray(cacheData.records) && cacheData.records.length > 0) {
+              setRecords(cacheData.records);
+              loadedFromFallback = true;
+            }
+          }
+        } catch (fsErr) {
+          console.warn("Gagal memuat dari Firestore cache:", fsErr);
+        }
+      }
+
+      // 3. Try LocalStorage Cache
+      if (!loadedFromFallback) {
+        const cached = localStorage.getItem(`project_ventura_records_cache_${projectId}`);
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setRecords(parsed);
+              loadedFromFallback = true;
+            }
+          } catch (e) {}
+        }
+      }
+
+      if (loadedFromFallback) {
+        setDataError(null);
+        setSheetNameInfo(`${activeProj?.name || ''} (Mode Cadangan Cloud)`);
+      } else {
+        setDataError(err.message || 'Gagal menyinkronkan data proyek dengan Google Drive/Sheets. Periksa koneksi internet atau hak akses.');
+      }
     } finally {
       setIsLoadingData(false);
     }
@@ -722,15 +948,17 @@ export default function App() {
 
   // Sync when token/projectId becomes available
   useEffect(() => {
-    if (token && activeProjectId && role) {
-      loadProjectData(token, activeProjectId);
+    if (activeProjectId && role) {
+      const activeToken = token || 'GUEST_BYPASS';
+      loadProjectData(activeToken, activeProjectId);
     }
   }, [token, activeProjectId, role, loadProjectData]);
 
   // Re-sync button handler
   const handleManualSync = () => {
-    if (token && activeProjectId) {
-      loadProjectData(token, activeProjectId);
+    if (activeProjectId) {
+      const activeToken = token || 'GUEST_BYPASS';
+      loadProjectData(activeToken, activeProjectId);
     }
   };
 
@@ -936,20 +1164,44 @@ export default function App() {
     const passTrimmed = operatorLoginPassword.trim();
 
     if (!userLower || !passTrimmed) {
-      setPinError('Nama pengguna dan sandi operator wajib diisi.');
+      setPinError('Nama pengguna dan sandi/PIN wajib diisi.');
       return;
     }
 
-    // Find in preloaded operators list
+    // 1. Check for built-in Admin login
+    if (userLower === 'admin') {
+      if (passTrimmed === rolePins.ADMIN) {
+        setRole('ADMIN');
+        setOperatorName('Administrator');
+        localStorage.setItem('project_ventura_role', 'ADMIN');
+        localStorage.setItem('project_ventura_operator_name', 'Administrator');
+        
+        setIsOperatorLocked(false);
+        setOperatorLockedProjectId('');
+        localStorage.removeItem('project_ventura_operator_locked');
+        localStorage.removeItem('project_ventura_operator_locked_project_id');
+
+        setOperatorLoginUsername('');
+        setOperatorLoginPassword('');
+        setActiveMenu('dashboard');
+        console.log("Admin logged in successfully!");
+        return;
+      } else {
+        setPinError('Sandi PIN Administrator salah.');
+        return;
+      }
+    }
+
+    // 2. Otherwise look in registered operators list
     const matchedOp = operators.find(op => op.username === userLower);
 
     if (!matchedOp) {
-      setPinError('Akun Operator tidak ditemukan atau Nama Pengguna salah.');
+      setPinError('Akun tidak ditemukan. Periksa nama pengguna atau hubungi Admin.');
       return;
     }
 
     if (matchedOp.password !== passTrimmed) {
-      setPinError('Sandi akun operator salah. Silakan hubungi Admin.');
+      setPinError('Sandi/PIN salah. Hubungi Administrator.');
       return;
     }
 
@@ -1482,55 +1734,89 @@ export default function App() {
           </div>
         </main>
       ) : !role ? (
-        // B. Role Selection Gate & PIN Verification Card (Google is connected, select role and enter PIN)
-        <main className="flex-1 max-w-4xl mx-auto w-full px-6 py-12 flex flex-col justify-center items-center z-10" id="sip_role_gate">
-          <div className="glass-card rounded-3xl overflow-hidden p-8 md:p-10 max-w-lg w-full shadow-2xl border border-white/10 space-y-6">
-            <div className="text-center space-y-2">
-              <div className="w-12 h-12 bg-indigo-500/10 text-indigo-400 rounded-xl flex items-center justify-center border border-white/5 mx-auto">
-                <UserCheck className="w-6 h-6" />
+        // B. Streamlined Gate based on Auth Type (Guest Bypass vs. Unified Operator/Admin Login)
+        token === 'GUEST_BYPASS' ? (
+          // 1. Streamlined Guest Gate (Request 2)
+          <main className="flex-1 max-w-4xl mx-auto w-full px-6 py-12 flex flex-col justify-center items-center z-10" id="sip_role_gate_guest">
+            <div className="glass-card rounded-3xl p-8 md:p-10 max-w-lg w-full shadow-2xl border border-white/10 space-y-6 animate-fadeIn">
+              <div className="text-center space-y-2">
+                <div className="w-12 h-12 bg-emerald-500/10 text-emerald-400 rounded-xl flex items-center justify-center border border-white/5 mx-auto">
+                  <Briefcase className="w-6 h-6" />
+                </div>
+                <h2 className="text-xl font-black text-white uppercase tracking-tight font-sans">Masuk Mode Tamu</h2>
+                <p className="text-xs text-slate-400 leading-normal max-w-xs mx-auto">
+                  Silakan pilih jalur transmisi / proyek yang ingin Anda pantau (Read-Only).
+                </p>
               </div>
-              <h2 className="text-xl font-black text-white uppercase tracking-tight font-sans">Verifikasi Akses Peran</h2>
-              <p className="text-xs text-slate-400 leading-normal max-w-xs mx-auto">
-                Terhubung sebagai <span className="font-semibold text-indigo-400 font-mono">{user.email}</span>. Pilih metode masuk Anda.
-              </p>
-            </div>
 
-            {/* Tab switch for Login Mode */}
-            <div className="grid grid-cols-2 bg-slate-950 p-1 rounded-xl border border-white/5">
-              <button
-                type="button"
-                onClick={() => { setIsOperatorLoginMode(false); setPinError(null); }}
-                className={`py-2 px-3 text-center text-[10px] font-extrabold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
-                  !isOperatorLoginMode 
-                    ? 'bg-indigo-600 text-white shadow' 
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                PIN Peran Umum
-              </button>
-              <button
-                type="button"
-                onClick={() => { setIsOperatorLoginMode(true); setPinError(null); }}
-                className={`py-2 px-3 text-center text-[10px] font-extrabold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
-                  isOperatorLoginMode 
-                    ? 'bg-indigo-600 text-white shadow' 
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                Akun Operator
-              </button>
-            </div>
-
-            {isOperatorLoginMode ? (
-              /* OPERATOR LOGIN FORM */
-              <form onSubmit={handleVerifyOperator} className="space-y-5">
-                <div className="bg-slate-900/40 p-3.5 rounded-xl border border-white/5 text-slate-400 text-[10px] leading-relaxed">
-                  🔒 Akun operator terdaftar secara otomatis mengunci jalur proyek dan peran pekerjaan (Lapangan / QC) Anda sesuai dengan yang telah ditentukan oleh Administrator.
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label htmlFor="guest_project_select" className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
+                    Pilih Jalur Transmisi / Proyek
+                  </label>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-emerald-400">
+                      <Briefcase className="w-4 h-4" />
+                    </span>
+                    <select
+                      id="guest_project_select"
+                      value={activeProjectId}
+                      onChange={(e) => {
+                        setActiveProjectId(e.target.value);
+                        localStorage.setItem('project_ventura_active_project_id', e.target.value);
+                      }}
+                      className="w-full pl-10 pr-4 py-3 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer font-sans font-bold"
+                    >
+                      {projects.map((proj) => (
+                        <option key={proj.id} value={proj.id} className="bg-slate-950 text-white font-semibold">
+                          {proj.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
-                <div className="space-y-2">
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="flex-1 py-2.5 bg-slate-900 border border-white/10 hover:bg-slate-950 text-slate-300 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                  >
+                    Kembali
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRole('GUEST');
+                      localStorage.setItem('project_ventura_role', 'GUEST');
+                      setActiveMenu('dashboard');
+                    }}
+                    className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-emerald-600/25 cursor-pointer"
+                  >
+                    Masuk Dashboard
+                  </button>
+                </div>
+              </div>
+            </div>
+          </main>
+        ) : (
+          // 2. Unified Operator & Admin Login Form (Request 3)
+          <main className="flex-1 max-w-4xl mx-auto w-full px-6 py-12 flex flex-col justify-center items-center z-10" id="sip_role_gate_auth">
+            <div className="glass-card rounded-3xl p-8 md:p-10 max-w-lg w-full shadow-2xl border border-white/10 space-y-6 animate-fadeIn">
+              <div className="text-center space-y-2">
+                <div className="w-12 h-12 bg-indigo-500/10 text-indigo-400 rounded-xl flex items-center justify-center border border-white/5 mx-auto">
+                  <UserCheck className="w-6 h-6" />
+                </div>
+                <h2 className="text-xl font-black text-white uppercase tracking-tight font-sans">Masuk Akun Operator</h2>
+                <p className="text-xs text-slate-400 leading-normal max-w-xs mx-auto">
+                  Terhubung dengan Google Drive. Silakan masukkan kredensial Nama Pengguna & Sandi/PIN.
+                </p>
+              </div>
+
+              <form onSubmit={handleVerifyOperator} className="space-y-4">
+                <div className="space-y-1.5">
                   <label htmlFor="op_login_username" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
-                    Nama Pengguna Operator (Username)
+                    Nama Pengguna (Username)
                   </label>
                   <div className="relative">
                     <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
@@ -1543,15 +1829,15 @@ export default function App() {
                       value={operatorLoginUsername}
                       onChange={(e) => setOperatorLoginUsername(e.target.value)}
                       placeholder="Masukkan nama pengguna..."
-                      className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold font-sans"
                     />
                   </div>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   <div className="flex justify-between items-center">
                     <label htmlFor="op_login_password" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
-                      Sandi Akses (Password)
+                      Sandi Akses / PIN
                     </label>
                     <button
                       type="button"
@@ -1572,7 +1858,7 @@ export default function App() {
                       required
                       value={operatorLoginPassword}
                       onChange={(e) => setOperatorLoginPassword(e.target.value)}
-                      placeholder="Masukkan sandi..."
+                      placeholder="Masukkan sandi atau PIN..."
                       className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
                     />
                   </div>
@@ -1601,188 +1887,9 @@ export default function App() {
                   </button>
                 </div>
               </form>
-            ) : (
-              /* LEGACY PIN LOGIN FORM */
-              <form onSubmit={handleVerifyRole} className="space-y-5">
-                {/* Step 1: Project / Transmission Path Selection */}
-                <div className="space-y-2">
-                  <label htmlFor="login_project_select" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
-                    Langkah 1: Pilih Jalur Transmisi / Proyek
-                  </label>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-indigo-400">
-                      <Briefcase className="w-4 h-4" />
-                    </span>
-                    <select
-                      id="login_project_select"
-                      value={activeProjectId}
-                      onChange={(e) => {
-                        setActiveProjectId(e.target.value);
-                        localStorage.setItem('project_ventura_active_project_id', e.target.value);
-                      }}
-                      className="w-full pl-10 pr-4 py-3 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer font-sans font-bold"
-                    >
-                      {projects.map((proj) => (
-                        <option key={proj.id} value={proj.id} className="bg-slate-950 text-white font-semibold">
-                          {proj.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <p className="text-[10px] text-slate-400 leading-normal">
-                    Seluruh pengisian data lahan, berkas fisik PDF, & QC akan difokuskan khusus untuk jalur proyek yang Anda pilih ini.
-                  </p>
-                </div>
-
-                {/* Step 2: Role selection */}
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
-                    Langkah 2: Pilih Peran Pekerjaan Anda
-                  </label>
-                  <div className="grid grid-cols-1 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => { setLoginRole('ADMIN'); setPinError(null); }}
-                      className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
-                        loginRole === 'ADMIN' 
-                          ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-lg' 
-                          : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
-                      }`}
-                    >
-                      <div>
-                        <strong className="text-xs block text-left">1. Administrator (Admin)</strong>
-                        <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Kelola seluruh data, tambah jalur proyek, & atur PIN akses</span>
-                      </div>
-                      {loginRole === 'ADMIN' && <div className="w-2.5 h-2.5 rounded-full bg-indigo-400 shrink-0"></div>}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => { setLoginRole('FIELD'); setPinError(null); }}
-                      className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
-                        loginRole === 'FIELD' 
-                          ? 'bg-emerald-600/20 border-emerald-500 text-white shadow-lg' 
-                          : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
-                      }`}
-                    >
-                      <div>
-                        <strong className="text-xs block text-left">2. Petugas Lapangan (Lapangan)</strong>
-                        <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Pengisian data lahan, tanaman, bangunan, & upload berkas PDF</span>
-                      </div>
-                      {loginRole === 'FIELD' && <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0"></div>}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => { setLoginRole('QC'); setPinError(null); }}
-                      className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
-                        loginRole === 'QC' 
-                          ? 'bg-amber-600/20 border-amber-500 text-white shadow-lg' 
-                          : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
-                      }`}
-                    >
-                      <div>
-                        <strong className="text-xs block text-left">3. Verifikator Quality Control (QC)</strong>
-                        <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Cek kelayakan data, isi status QC berkas, & unggah berkas</span>
-                      </div>
-                      {loginRole === 'QC' && <div className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0"></div>}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => { setLoginRole('GUEST'); setPinError(null); }}
-                      className={`px-4 py-3 rounded-xl border text-left flex justify-between items-center transition-all cursor-pointer ${
-                        loginRole === 'GUEST' 
-                          ? 'bg-slate-700/35 border-slate-500 text-white shadow-lg' 
-                          : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-900'
-                      }`}
-                    >
-                      <div>
-                        <strong className="text-xs block text-left">4. Tamu Kontraktor (Tamu)</strong>
-                        <span className="text-[10px] text-slate-400 block mt-0.5 text-left">Akses Dashboard Utama, visualisasi, dan grafik progres (Read-Only)</span>
-                      </div>
-                      {loginRole === 'GUEST' && <div className="w-2.5 h-2.5 rounded-full bg-slate-400 shrink-0"></div>}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Step 3: Operator / Team Member Name */}
-                <div className="space-y-2">
-                  <label htmlFor="operator_name_input" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
-                    Langkah 3: {loginRole === 'GUEST' ? 'Nama Anda / Tamu (Opsional)' : 'Nama Petugas Lapangan / Operator (Wajib)'}
-                  </label>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
-                      <User className="w-4 h-4" />
-                    </span>
-                    <input
-                      id="operator_name_input"
-                      type="text"
-                      required={loginRole !== 'GUEST'}
-                      value={operatorName}
-                      onChange={(e) => setOperatorName(e.target.value)}
-                      placeholder={loginRole === 'GUEST' ? 'Tuliskan nama Anda atau biarkan kosong...' : 'Tuliskan nama lengkap atau tim Anda (contoh: Tim 1, Budi Hartono)...'}
-                      className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold placeholder:font-normal placeholder:text-slate-500"
-                    />
-                  </div>
-                </div>
-
-                {/* Step 4: PIN Code entry */}
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <label htmlFor="role_pin_input" className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">
-                      Langkah 4: {loginRole === 'GUEST' ? 'PIN Tamu (Opsional / tamu123)' : `Masukkan PIN Akses ${loginRole}`}
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setShowPin(!showPin)}
-                      className="text-[10px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-bold cursor-pointer"
-                    >
-                      {showPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      {showPin ? 'Sembunyikan' : 'Tampilkan'}
-                    </button>
-                  </div>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
-                      <Key className="w-4 h-4" />
-                    </span>
-                    <input
-                      id="role_pin_input"
-                      type={showPin ? 'text' : 'password'}
-                      value={pinInput}
-                      onChange={(e) => setPinInput(e.target.value)}
-                      placeholder={loginRole === 'GUEST' ? 'Masukkan tamu123 atau biarkan kosong' : `Sandi PIN ${loginRole}...`}
-                      className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 tracking-widest placeholder:tracking-normal placeholder:text-slate-500 font-mono"
-                    />
-                  </div>
-                </div>
-
-                {pinError && (
-                  <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-lg font-semibold flex items-center gap-2">
-                    <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
-                    <p>{pinError}</p>
-                  </div>
-                )}
-
-                <div className="flex gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="flex-1 py-2.5 bg-slate-900 border border-white/10 hover:bg-slate-950 text-slate-300 text-xs font-bold rounded-xl transition-all cursor-pointer"
-                  >
-                    Ganti Akun Google
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-indigo-600/25 cursor-pointer"
-                  >
-                    Verifikasi & Masuk
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </main>
+            </div>
+          </main>
+        )
       ) : (
         /* 3. CORE APP VIEW (NAVBAR + VIEW PANEL) */
         <div className="flex-1 flex flex-col md:flex-row max-w-full w-full p-4 sm:p-6 lg:p-8 gap-6 z-10 relative" id="sip_main_layout">
@@ -1903,25 +2010,7 @@ export default function App() {
               </button>
             )}
 
-            {/* Menu 3. Berkas Drive (PDF) - Locked for Guests */}
-            {role !== 'GUEST' && (
-              <button
-                onClick={() => {
-                  setActiveMenu('upload');
-                  if (!isSidebarPinned) setIsSidebarHovered(false);
-                }}
-                className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold transition-all flex items-center gap-2.5 cursor-pointer ${
-                  activeMenu === 'upload' 
-                    ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 shadow-inner' 
-                    : 'text-slate-400 hover:bg-white/5 hover:text-white border border-transparent'
-                }`}
-              >
-                <UploadCloud className="w-4 h-4 shrink-0" />
-                3. Berkas Drive (PDF)
-              </button>
-            )}
-
-            {/* Menu 4. Verifikasi & QC - Admin and QC only */}
+            {/* Menu 3. Verifikasi & QC - Admin and QC only */}
             {(role === 'ADMIN' || role === 'QC') && (
               <button
                 onClick={() => {
@@ -1935,11 +2024,11 @@ export default function App() {
                 }`}
               >
                 <CheckSquare className="w-4 h-4 shrink-0" />
-                4. Verifikasi & QC
+                3. Verifikasi & QC
               </button>
             )}
 
-            {/* Menu 5. Log Aktivitas - Admin only */}
+            {/* Menu 4. Log Aktivitas - Admin only */}
             {role === 'ADMIN' && (
               <button
                 onClick={() => {
@@ -1953,11 +2042,11 @@ export default function App() {
                 }`}
               >
                 <Clock className="w-4 h-4 shrink-0" />
-                5. Log Aktivitas
+                4. Log Aktivitas
               </button>
             )}
 
-            {/* Menu 6. Manajemen Proyek - Admin only */}
+            {/* Menu 5. Manajemen Proyek - Admin only */}
             {role === 'ADMIN' && (
               <button
                 onClick={() => {
@@ -1971,7 +2060,7 @@ export default function App() {
                 }`}
               >
                 <Briefcase className="w-4 h-4 shrink-0 text-indigo-400" />
-                6. Manajemen Proyek
+                5. Manajemen Proyek
               </button>
             )}
 
@@ -2353,7 +2442,17 @@ export default function App() {
               <div className="glass-card p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-4 min-h-[350px] shadow-lg">
                 <div className="w-8 h-8 border-3 border-indigo-400 border-t-transparent rounded-full animate-spin"></div>
                 <p className="text-xs font-semibold text-slate-200 font-sans">Mengkoneksikan Google Drive & Memuat Data Proyek...</p>
-                <p className="text-[10px] text-slate-400 italic font-sans">Ini memakan waktu beberapa saat untuk memverifikasi folder di Google Drive Anda.</p>
+                <p className="text-[10px] text-slate-400 italic font-sans max-w-sm">Ini memakan waktu beberapa saat untuk memverifikasi folder & spreadsheet di Google Drive Anda.</p>
+                <button
+                  onClick={() => {
+                    if (activeProjectId) {
+                      loadProjectData('GUEST_BYPASS', activeProjectId);
+                    }
+                  }}
+                  className="mt-2 px-3.5 py-1.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-[11px] font-medium rounded-lg border border-slate-700 transition-all cursor-pointer"
+                >
+                  Batal & Guanakan Mode Cadangan (Lokal/Cloud)
+                </button>
               </div>
             ) : dataError ? (
               <div className="glass-card p-8 rounded-2xl space-y-4 shadow-lg">
@@ -2401,16 +2500,7 @@ export default function App() {
                   />
                 )}
                 
-                {activeMenu === 'upload' && role !== 'GUEST' && (
-                  <DocUpload 
-                    records={records} 
-                    accessToken={token!} 
-                    onUpdateRecord={handleUpdateRecord} 
-                    uploadsFolderId={projectUploadsFolderId || undefined}
-                    activeProjectName={projects.find(p => p.id === activeProjectId)?.name}
-                  />
-                )}
-                
+
                 {activeMenu === 'qc' && (role === 'ADMIN' || role === 'QC') && (
                   <QCPanel records={records} adminEmail={user?.email || 'Admin'} onSaveQC={handleUpdateRecord} />
                 )}
@@ -2448,6 +2538,28 @@ export default function App() {
                         Jalur Transmisi / Proyek
                       </button>
                       <button
+                        onClick={() => setProjectSubTab('geojson')}
+                        className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+                          projectSubTab === 'geojson'
+                            ? 'border-indigo-500 text-indigo-300 bg-indigo-500/5 rounded-t-xl'
+                            : 'border-transparent text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Layers className="w-4 h-4 text-indigo-400" />
+                        Manajemen Berkas GeoJSON
+                      </button>
+                      <button
+                        onClick={() => setProjectSubTab('operators')}
+                        className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+                          projectSubTab === 'operators'
+                            ? 'border-indigo-500 text-indigo-300 bg-indigo-500/5 rounded-t-xl'
+                            : 'border-transparent text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Users className="w-4 h-4 text-indigo-400" />
+                        Registrasi & Kelola Operator
+                      </button>
+                      <button
                         onClick={() => setProjectSubTab('pins')}
                         className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
                           projectSubTab === 'pins'
@@ -2468,17 +2580,6 @@ export default function App() {
                       >
                         <RefreshCw className="w-4 h-4 text-indigo-400" />
                         Ekspor & Impor Database
-                      </button>
-                      <button
-                        onClick={() => setProjectSubTab('operators')}
-                        className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
-                          projectSubTab === 'operators'
-                            ? 'border-indigo-500 text-indigo-300 bg-indigo-500/5 rounded-t-xl'
-                            : 'border-transparent text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        <Users className="w-4 h-4 text-indigo-400" />
-                        Registrasi Operator
                       </button>
                     </div>
 
@@ -2884,188 +2985,500 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Tab 4: Registrasi Operator */}
-                    {projectSubTab === 'operators' && (
-                      <div className="space-y-6 animate-fadeIn" id="admin_manage_operators">
-                        {/* A. Register Operator Form */}
-                        <form onSubmit={handleAddOperator} className="glass-card p-6 rounded-2xl border border-indigo-500/30 shadow-xl space-y-4">
+                    {/* Tab 4: Manajemen Berkas GeoJSON */}
+                    {projectSubTab === 'geojson' && (
+                      <div className="space-y-6 animate-fadeIn" id="admin_manage_geojson">
+                        
+                        {/* A. Info & Description */}
+                        <div className="glass-card p-6 rounded-2xl border border-indigo-500/30 shadow-xl space-y-4">
                           <div className="flex items-center gap-1.5 text-indigo-300 text-sm font-bold uppercase tracking-wider border-b border-white/5 pb-2.5">
-                            <Users className="w-5 h-5 text-indigo-400" />
-                            Registrasi Akun Operator Baru
+                            <Layers className="w-5 h-5 text-indigo-400" />
+                            Manajemen File Spasial GeoJSON
                           </div>
                           <p className="text-xs text-slate-400 leading-normal">
-                            Daftarkan akun khusus untuk Petugas Lapangan atau Verifikator Quality Control agar mereka dapat masuk dengan sandi unik masing-masing. Anda juga dapat membatasi pengisian data mereka khusus pada satu jalur proyek tertentu.
+                            Unggah, aktifkan, atau atur pemetaan kolom atribut file spasial GeoJSON Anda. Data yang diunggah di sini akan secara otomatis disinkronkan ke seluruh klien dan ditampilkan di Peta Spasial (GIS) secara real-time.
                           </p>
 
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 pt-1">
-                            {/* Full Name */}
-                            <div className="space-y-1.5">
-                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                                Nama Lengkap / Tim
+                          {/* Upload Cards Grid */}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 pt-2">
+                            {/* Card upload Bidang */}
+                            <div className="p-4 bg-slate-900/45 rounded-xl border border-white/5 flex flex-col justify-between space-y-3">
+                              <div>
+                                <h4 className="text-xs font-bold text-emerald-300">1. GeoJSON Bidang Tanah</h4>
+                                <p className="text-[11px] text-slate-400 mt-0.5">Poligon bidang per-desa/per-jalur untuk memetakan kepemilikan lahan.</p>
+                              </div>
+                              <label className="px-3 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-white rounded-lg text-xs font-semibold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md">
+                                <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
+                                Unggah Bidang
+                                <input type="file" accept=".geojson,application/json" onChange={(e) => handleGeoJSONUpload(e, 'bidang')} className="hidden" />
                               </label>
-                              <input
-                                type="text"
-                                required
-                                value={newOpName}
-                                onChange={(e) => setNewOpName(e.target.value)}
-                                placeholder="Contoh: Budi Santoso / Tim 1"
-                                className="w-full px-3 py-2 bg-slate-950 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              />
                             </div>
 
-                            {/* Username */}
-                            <div className="space-y-1.5">
-                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                                Username (Alfanumerik)
+                            {/* Card upload Jalur */}
+                            <div className="p-4 bg-slate-900/45 rounded-xl border border-white/5 flex flex-col justify-between space-y-3">
+                              <div>
+                                <h4 className="text-xs font-bold text-orange-300">2. GeoJSON Jalur Corridor</h4>
+                                <p className="text-[11px] text-slate-400 mt-0.5">Garis koridor/buffer bebas hambatan ROW transmisi 150 kV.</p>
+                              </div>
+                              <label className="px-3 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-white rounded-lg text-xs font-semibold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md">
+                                <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
+                                Unggah Jalur
+                                <input type="file" accept=".geojson,application/json" onChange={(e) => handleGeoJSONUpload(e, 'jalur')} className="hidden" />
                               </label>
-                              <input
-                                type="text"
-                                required
-                                value={newOpUsername}
-                                onChange={(e) => setNewOpUsername(e.target.value)}
-                                placeholder="Contoh: budi_lapangan"
-                                className="w-full px-3 py-2 bg-slate-950 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              />
                             </div>
 
-                            {/* Password */}
-                            <div className="space-y-1.5">
-                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                                Sandi Akses (Password)
+                            {/* Card upload Tower */}
+                            <div className="p-4 bg-slate-900/45 rounded-xl border border-white/5 flex flex-col justify-between space-y-3">
+                              <div>
+                                <h4 className="text-xs font-bold text-indigo-300">3. GeoJSON Tapak Tower</h4>
+                                <p className="text-[11px] text-slate-400 mt-0.5">Titik posisi koordinat tower penyangga lengkap dengan nomor tower.</p>
+                              </div>
+                              <label className="px-3 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-white rounded-lg text-xs font-semibold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md">
+                                <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
+                                Unggah Tower
+                                <input type="file" accept=".geojson,application/json" onChange={(e) => handleGeoJSONUpload(e, 'tower')} className="hidden" />
                               </label>
-                              <input
-                                type="text"
-                                required
-                                value={newOpPassword}
-                                onChange={(e) => setNewOpPassword(e.target.value)}
-                                placeholder="Contoh: sandi123"
-                                className="w-full px-3 py-2 bg-slate-950 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              />
-                            </div>
-
-                            {/* Role selection */}
-                            <div className="space-y-1.5">
-                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                                Peran Level Pekerjaan
-                              </label>
-                              <select
-                                value={newOpRole}
-                                onChange={(e) => setNewOpRole(e.target.value as 'FIELD' | 'QC')}
-                                className="w-full px-3 py-2 bg-slate-950 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer font-bold"
-                              >
-                                <option value="FIELD">Lapangan (Field Operator)</option>
-                                <option value="QC">QC (Quality Control)</option>
-                              </select>
-                            </div>
-
-                            {/* Project routing lock */}
-                            <div className="space-y-1.5">
-                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                                Pembatasan Jalur Proyek
-                              </label>
-                              <select
-                                value={newOpProjectId}
-                                onChange={(e) => setNewOpProjectId(e.target.value)}
-                                className="w-full px-3 py-2 bg-slate-950 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer font-bold"
-                              >
-                                <option value="all">Semua Jalur Proyek (Bebas)</option>
-                                {projects.map(p => (
-                                  <option key={p.id} value={p.id}>{p.name}</option>
-                                ))}
-                              </select>
                             </div>
                           </div>
+                        </div>
 
-                          {operatorError && (
-                            <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl font-semibold flex items-center gap-2">
-                              <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
-                              <p>{operatorError}</p>
-                            </div>
-                          )}
-
-                          <div className="flex justify-end gap-2 pt-2 border-t border-white/5">
-                            <button
-                              type="submit"
-                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5"
-                            >
-                              <Plus className="w-4 h-4" />
-                              Daftarkan Operator
-                            </button>
-                          </div>
-                        </form>
-
-                        {/* B. List of Registered Operators */}
+                        {/* B. List of currently loaded GeoJSONs */}
                         <div className="glass-card p-6 rounded-2xl border border-white/10 shadow-xl space-y-4">
                           <span className="text-xs font-bold text-slate-200 uppercase tracking-wider block">
-                            Daftar Operator Terdaftar ({operators.length})
+                            Daftar Berkas GeoJSON Cloud Terpasang ({loadedGeoJSONs.length})
                           </span>
 
-                          {isLoadingOperators ? (
-                            <div className="text-center py-8 text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
-                              <RefreshCw className="w-6 h-6 animate-spin text-indigo-400" />
-                              Memuat data operator terdaftar...
-                            </div>
-                          ) : operators.length === 0 ? (
-                            <div className="text-center py-8 text-slate-400 text-xs bg-slate-900/40 rounded-xl border border-white/5 leading-relaxed">
-                              Belum ada operator khusus terdaftar. Seluruh tim saat ini masuk menggunakan PIN Akses Peran Umum.
+                          {loadedGeoJSONs.length > 0 ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              {loadedGeoJSONs.map((g) => (
+                                <div key={g.id} className="flex items-center justify-between p-4 bg-slate-900/50 rounded-xl border border-white/5 text-xs">
+                                  <div className="flex items-center gap-3 overflow-hidden mr-2">
+                                    <span className={`w-3 h-3 rounded-full shrink-0 ${
+                                      g.type === 'bidang' ? 'bg-emerald-400' : g.type === 'jalur' ? 'bg-orange-400' : 'bg-indigo-400'
+                                    }`} />
+                                    <div className="overflow-hidden">
+                                      <span className="text-slate-200 font-bold block truncate" title={g.name}>{g.name}</span>
+                                      <span className="text-[9px] text-slate-400 font-mono mt-0.5 block uppercase tracking-wider">
+                                        Tipe: {g.type} {g.fieldMapping ? '• Mapped' : '• Auto-Detect'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <button
+                                      onClick={() => {
+                                        setTempMapping(g.fieldMapping || {
+                                          desa: '',
+                                          span: '',
+                                          nobid: '',
+                                          nama: '',
+                                          tower: '',
+                                          jalurName: '',
+                                          rotasi: ''
+                                        });
+                                        setConfiguringLayer(g);
+                                      }}
+                                      className="p-2 text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 rounded-lg transition-colors border border-indigo-500/10"
+                                      title="Atur Pemetaan Kolom Atribut"
+                                    >
+                                      <Settings className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleToggleVisibility(g.id, g.visible)}
+                                      className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-colors ${
+                                        g.visible ? 'bg-indigo-500/20 text-indigo-300' : 'bg-slate-800 text-slate-500'
+                                      }`}
+                                    >
+                                      {g.visible ? 'Sembunyikan' : 'Tampilkan'}
+                                    </button>
+                                    <button
+                                      onClick={() => handleRemoveGeoJSON(g.id)}
+                                      className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors border border-white/5"
+                                      title="Hapus Lapisan"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           ) : (
-                            <div className="overflow-x-auto rounded-xl border border-white/10 bg-slate-950">
-                              <table className="w-full text-left border-collapse">
-                                <thead>
-                                  <tr className="border-b border-white/10 bg-white/5 text-[10px] font-black uppercase tracking-wider text-slate-400">
-                                    <th className="py-3 px-4">Nama Lengkap / Tim</th>
-                                    <th className="py-3 px-4">Username</th>
-                                    <th className="py-3 px-4">Sandi Akses</th>
-                                    <th className="py-3 px-4">Level Peran</th>
-                                    <th className="py-3 px-4">Restriksi Jalur Proyek</th>
-                                    <th className="py-3 px-4 text-right">Aksi</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-white/5 text-xs text-slate-300">
-                                  {operators.map((op) => {
-                                    const matchedProject = projects.find(p => p.id === op.projectId);
-                                    return (
-                                      <tr key={op.id} className="hover:bg-white/[2%] transition-colors">
-                                        <td className="py-3.5 px-4 font-bold text-white">{op.name}</td>
-                                        <td className="py-3.5 px-4 font-mono text-indigo-300">{op.username}</td>
-                                        <td className="py-3.5 px-4 font-mono font-bold text-slate-300">{op.password}</td>
-                                        <td className="py-3.5 px-4">
-                                          <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-md border uppercase tracking-wider ${
-                                            op.role === 'FIELD' 
-                                              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' 
-                                              : 'bg-amber-500/10 text-amber-300 border-amber-500/20'
-                                          }`}>
-                                            {op.role === 'FIELD' ? 'Lapangan' : 'QC'}
-                                          </span>
-                                        </td>
-                                        <td className="py-3.5 px-4">
-                                          {op.projectId === 'all' || !op.projectId ? (
-                                            <span className="text-[10px] text-indigo-400 font-extrabold bg-indigo-500/10 border border-indigo-500/15 px-2 py-0.5 rounded-md">
-                                              Semua Jalur
-                                            </span>
-                                          ) : (
-                                            <span className="text-[10px] text-white font-bold bg-slate-900 border border-white/10 px-2 py-0.5 rounded-md">
-                                              {matchedProject ? matchedProject.name : op.projectId}
-                                            </span>
-                                          )}
-                                        </td>
-                                        <td className="py-3.5 px-4 text-right">
-                                          <button
-                                            type="button"
-                                            onClick={() => handleDeleteOperator(op.username)}
-                                            className="px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white text-[10px] font-bold rounded-lg border border-rose-500/20 transition-all cursor-pointer"
-                                          >
-                                            Hapus
-                                          </button>
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
+                            <div className="text-center py-8 text-slate-500 text-xs bg-slate-900/40 rounded-xl border border-white/5 leading-relaxed">
+                              Belum ada berkas GeoJSON eksternal yang diunggah ke cloud. Gunakan tombol di atas untuk mengunggah file.
                             </div>
                           )}
+                        </div>
+
+                        {/* C. Dynamic Column Mapping Configuration Modal */}
+                        {configuringLayer && (
+                          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+                            <div className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-scaleUp">
+                              
+                              {/* Modal Header */}
+                              <div className="p-5 border-b border-white/10 flex items-center justify-between bg-slate-950/40">
+                                <div className="flex items-center gap-2">
+                                  <Layers className="w-5 h-5 text-indigo-400" />
+                                  <div>
+                                    <h3 className="font-bold text-white text-sm">Pemetaan Kolom Atribut GIS</h3>
+                                    <p className="text-[11px] text-slate-400 truncate max-w-[280px]">{configuringLayer.name}</p>
+                                  </div>
+                                </div>
+                                <button 
+                                  onClick={() => setConfiguringLayer(null)}
+                                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5 transition-all cursor-pointer"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+
+                              {/* Modal Content */}
+                              <div className="p-5 space-y-4">
+                                <p className="text-xs text-slate-300 leading-relaxed">
+                                  Pilih nama field (kolom) dari file GeoJSON Anda yang menyimpan data berikut untuk dicocokkan dengan database aplikasi secara real-time.
+                                </p>
+
+                                {/* List of fields in GeoJSON to show for reference */}
+                                <div className="bg-slate-950 p-3 rounded-xl border border-white/5">
+                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Kolom Tersedia di File:</p>
+                                  <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto scrollbar-thin">
+                                    {getGeoJSONKeys(configuringLayer.data).map(key => (
+                                      <span key={key} className="text-[9px] font-mono px-1.5 py-0.5 bg-white/5 text-indigo-300 rounded border border-white/5">
+                                        {key}
+                                      </span>
+                                    ))}
+                                    {getGeoJSONKeys(configuringLayer.data).length === 0 && (
+                                      <span className="text-[10px] text-slate-500 font-mono">Tidak ada kolom ditemukan</span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="space-y-3.5">
+                                  {configuringLayer.type === 'bidang' && (
+                                    <>
+                                      {/* Desa */}
+                                      <div className="space-y-1">
+                                        <label className="text-[11px] font-bold text-slate-300 flex justify-between">
+                                          <span>Nama Desa / Kelurahan:</span>
+                                          <span className="text-indigo-400 font-normal text-[10px]">Auto-detect fallback</span>
+                                        </label>
+                                        <select
+                                          value={tempMapping.desa || ''}
+                                          onChange={(e) => setTempMapping({ ...tempMapping, desa: e.target.value })}
+                                          className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
+                                        >
+                                          <option value="">-- Gunakan Auto-Detect --</option>
+                                          {getGeoJSONKeys(configuringLayer.data).map(key => (
+                                            <option key={key} value={key}>{key}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+
+                                      {/* Span */}
+                                      <div className="space-y-1">
+                                        <label className="text-[11px] font-bold text-slate-300 flex justify-between">
+                                          <span>Span / Section (T.xx-T.xx):</span>
+                                          <span className="text-indigo-400 font-normal text-[10px]">Auto-detect fallback</span>
+                                        </label>
+                                        <select
+                                          value={tempMapping.span || ''}
+                                          onChange={(e) => setTempMapping({ ...tempMapping, span: e.target.value })}
+                                          className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
+                                        >
+                                          <option value="">-- Gunakan Auto-Detect --</option>
+                                          {getGeoJSONKeys(configuringLayer.data).map(key => (
+                                            <option key={key} value={key}>{key}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+
+                                      {/* Nobid */}
+                                      <div className="space-y-1">
+                                        <label className="text-[11px] font-bold text-slate-300 flex justify-between">
+                                          <span>Nomor Bidang Tanah (NOBID):</span>
+                                          <span className="text-indigo-400 font-normal text-[10px]">Auto-detect fallback</span>
+                                        </label>
+                                        <select
+                                          value={tempMapping.nobid || ''}
+                                          onChange={(e) => setTempMapping({ ...tempMapping, nobid: e.target.value })}
+                                          className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
+                                        >
+                                          <option value="">-- Gunakan Auto-Detect --</option>
+                                          {getGeoJSONKeys(configuringLayer.data).map(key => (
+                                            <option key={key} value={key}>{key}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+
+                                      {/* Nama Pemilik */}
+                                      <div className="space-y-1">
+                                        <label className="text-[11px] font-bold text-slate-300 flex justify-between">
+                                          <span>Nama Pemilik (Nama Final):</span>
+                                          <span className="text-indigo-400 font-normal text-[10px]">Auto-detect fallback</span>
+                                        </label>
+                                        <select
+                                          value={tempMapping.nama || ''}
+                                          onChange={(e) => setTempMapping({ ...tempMapping, nama: e.target.value })}
+                                          className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
+                                        >
+                                          <option value="">-- Gunakan Auto-Detect --</option>
+                                          {getGeoJSONKeys(configuringLayer.data).map(key => (
+                                            <option key={key} value={key}>{key}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+
+                                      {/* Rotasi */}
+                                      <div className="space-y-1">
+                                        <label className="text-[11px] font-bold text-slate-300 flex justify-between">
+                                          <span>Field Sudut Rotasi Peta (ROTASI):</span>
+                                          <span className="text-emerald-400 font-normal text-[10px]">Rotasi tegak lurus</span>
+                                        </label>
+                                        <select
+                                          value={tempMapping.rotasi || ''}
+                                          onChange={(e) => setTempMapping({ ...tempMapping, rotasi: e.target.value })}
+                                          className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
+                                        >
+                                          <option value="">-- Gunakan Default (Tanpa Rotasi / 0°) --</option>
+                                          {getGeoJSONKeys(configuringLayer.data).map(key => (
+                                            <option key={key} value={key}>{key}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    </>
+                                  )}
+
+                                  {configuringLayer.type === 'tower' && (
+                                    <div className="space-y-1">
+                                      <label className="text-[11px] font-bold text-slate-300 flex justify-between">
+                                        <span>Nomor / Label Tower (towernumb):</span>
+                                        <span className="text-indigo-400 font-normal text-[10px]">Auto-detect fallback</span>
+                                      </label>
+                                      <select
+                                        value={tempMapping.tower || ''}
+                                        onChange={(e) => setTempMapping({ ...tempMapping, tower: e.target.value })}
+                                        className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
+                                      >
+                                        <option value="">-- Gunakan Auto-Detect --</option>
+                                        {getGeoJSONKeys(configuringLayer.data).map(key => (
+                                          <option key={key} value={key}>{key}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  )}
+
+                                  {configuringLayer.type === 'jalur' && (
+                                    <div className="space-y-1">
+                                      <label className="text-[11px] font-bold text-slate-300 flex justify-between">
+                                        <span>Nama Jalur / Koridor:</span>
+                                        <span className="text-orange-400 font-normal text-[10px]">Auto-detect fallback</span>
+                                      </label>
+                                      <select
+                                        value={tempMapping.jalurName || ''}
+                                        onChange={(e) => setTempMapping({ ...tempMapping, jalurName: e.target.value })}
+                                        className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
+                                      >
+                                        <option value="">-- Gunakan Auto-Detect --</option>
+                                        {getGeoJSONKeys(configuringLayer.data).map(key => (
+                                          <option key={key} value={key}>{key}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Modal Footer */}
+                              <div className="p-4 border-t border-white/10 bg-slate-950/40 flex items-center justify-end gap-2.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setConfiguringLayer(null)}
+                                  className="px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer transition-all"
+                                >
+                                  Batal
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await setDoc(doc(db, 'geojson_layers', configuringLayer.id), {
+                                        fieldMapping: tempMapping
+                                      }, { merge: true });
+                                      setConfiguringLayer(null);
+                                    } catch (err) {
+                                      console.warn('Gagal menyimpan pemetaan kolom GeoJSON:', err);
+                                    }
+                                  }}
+                                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-550 text-white rounded-xl text-xs font-bold shadow-md cursor-pointer transition-all"
+                                >
+                                  Simpan Pemetaan
+                                </button>
+                              </div>
+
+                            </div>
+                          </div>
+                        )}
+
+                      </div>
+                    )}
+
+                    {/* Tab: Registrasi & Kelola Operator */}
+                    {projectSubTab === 'operators' && (
+                      <div className="space-y-6 animate-fadeIn" id="admin_manage_operators">
+                        <div className="glass-card p-6 rounded-2xl border border-white/10 shadow-xl space-y-4">
+                          <div className="flex items-center gap-1.5 text-indigo-300 text-sm font-bold uppercase tracking-wider border-b border-white/5 pb-2.5">
+                            <Users className="w-5 h-5 text-indigo-400" />
+                            Registrasi & Kelola Akun Operator
+                          </div>
+                          <p className="text-xs text-slate-400 leading-normal">
+                            Tambahkan akun khusus untuk staf lapangan, verifikator QC, atau admin tambahan. Operator akan masuk menggunakan <strong>Nama Pengguna (Username)</strong> dan <strong>Sandi/PIN</strong> unik mereka tanpa harus memilih status secara manual. Log aktivitas perubahan data akan mencatat nama masing-masing operator secara otomatis.
+                          </p>
+                          
+                          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
+                            {/* Form Pendaftaran */}
+                            <form onSubmit={handleAddOperator} className="lg:col-span-5 bg-slate-900/40 p-5 rounded-xl border border-white/5 space-y-4">
+                              <span className="text-[10px] font-bold text-slate-200 uppercase tracking-wider block border-b border-white/5 pb-1.5">
+                                Registrasi Akun Baru
+                              </span>
+
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-bold text-slate-400 uppercase">Nama Pengguna (Username)</label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={newOpUsername}
+                                  onChange={(e) => setNewOpUsername(e.target.value)}
+                                  placeholder="contoh: budi_lapangan"
+                                  className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-bold text-slate-400 uppercase">Sandi Akses / PIN</label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={newOpPassword}
+                                  onChange={(e) => setNewOpPassword(e.target.value)}
+                                  placeholder="contoh: sandi123"
+                                  className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-bold text-slate-400 uppercase">Nama Lengkap / Tim</label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={newOpName}
+                                  onChange={(e) => setNewOpName(e.target.value)}
+                                  placeholder="contoh: Budi Hartono (Tim 1)"
+                                  className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-bold text-slate-400 uppercase">Peran Pekerjaan (Role)</label>
+                                <select
+                                  value={newOpRole}
+                                  onChange={(e) => setNewOpRole(e.target.value as any)}
+                                  className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                                >
+                                  <option value="FIELD">PETUGAS LAPANGAN (Input Data)</option>
+                                  <option value="QC">VERIFIKATOR QC (Validasi & QC)</option>
+                                  <option value="ADMIN">ADMINISTRATOR (Akses Penuh)</option>
+                                </select>
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-bold text-slate-400 uppercase">Kunci Akses Jalur Proyek</label>
+                                <select
+                                  value={newOpProjectId}
+                                  onChange={(e) => setNewOpProjectId(e.target.value)}
+                                  className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+                                >
+                                  <option value="all">Semua Jalur (Akses Global)</option>
+                                  {projects.map(p => (
+                                    <option key={p.id} value={p.id}>{p.name}</option>
+                                  ))}
+                                </select>
+                                <span className="text-[8px] text-slate-500 leading-tight block pt-0.5">
+                                  Jika dikunci ke jalur tertentu, operator tidak akan bisa melihat atau mengedit data dari jalur proyek lainnya.
+                                </span>
+                              </div>
+
+                              {operatorError && (
+                                <p className="text-[10px] text-rose-400 bg-rose-500/10 px-2.5 py-1.5 rounded-lg border border-rose-500/25 font-semibold leading-normal">
+                                  {operatorError}
+                                </p>
+                              )}
+
+                              <button
+                                type="submit"
+                                className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer"
+                              >
+                                Daftarkan Akun Operator
+                              </button>
+                            </form>
+
+                            {/* Daftar Operator Terdaftar */}
+                            <div className="lg:col-span-7 bg-slate-900/10 p-1.5 rounded-xl border border-white/5 space-y-3">
+                              <span className="text-[10px] font-bold text-slate-200 uppercase tracking-wider block border-b border-white/5 pb-1.5 px-3 pt-2">
+                                Daftar Akun Terdaftar ({operators.length})
+                              </span>
+
+                              {isLoadingOperators ? (
+                                <p className="text-xs text-slate-500 text-center py-10">Memuat data operator...</p>
+                              ) : operators.length === 0 ? (
+                                <div className="text-center py-10 border border-dashed border-white/5 rounded-xl m-2 bg-white/2">
+                                  <p className="text-xs text-slate-500">Belum ada akun operator yang terdaftar.</p>
+                                  <p className="text-[10px] text-slate-600 mt-1">Gunakan formulir di sebelah kiri untuk mendaftarkan akun operator baru.</p>
+                                </div>
+                              ) : (
+                                <div className="max-h-[360px] overflow-y-auto space-y-2 pr-1.5 m-2">
+                                  {operators.map((op) => {
+                                    const lockedProjName = op.projectId === 'all' 
+                                      ? 'Semua Jalur (Akses Global)' 
+                                      : projects.find(p => p.id === op.projectId)?.name || `ID: ${op.projectId}`;
+                                    
+                                    return (
+                                      <div key={op.id} className="flex items-center justify-between bg-white/5 p-3 rounded-lg border border-white/5 text-xs hover:bg-white/8 transition-all">
+                                        <div className="space-y-1 flex-1 min-w-0 pr-4">
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-extrabold text-slate-200 font-mono text-[11px] truncate block">{op.username}</span>
+                                            <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded border ${
+                                              op.role === 'ADMIN' 
+                                                ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                                                : op.role === 'QC'
+                                                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                                                  : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                                            }`}>
+                                              {op.role}
+                                            </span>
+                                          </div>
+                                          <div className="space-y-0.5">
+                                            <p className="font-semibold text-slate-300">{op.name}</p>
+                                            <p className="text-[10px] text-slate-400">
+                                              Sandi: <span className="font-mono text-indigo-300 font-bold bg-white/5 px-1 rounded">{op.password}</span>
+                                            </p>
+                                            <p className="text-[9px] text-slate-500 truncate">
+                                              Akses: <span className="font-bold text-slate-400">{lockedProjName}</span>
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteOperator(op.username)}
+                                          className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/15 hover:border-rose-500/25 rounded-lg cursor-pointer transition-all shrink-0"
+                                          title="Hapus Akun Operator"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     )}

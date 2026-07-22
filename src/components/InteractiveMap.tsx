@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import type { LandRecord } from '../types';
 import { db } from '../lib/firebase';
-import { collection, getDocs, deleteDoc, doc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, deleteDoc, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 interface InteractiveMapProps {
   records: LandRecord[];
@@ -268,21 +268,44 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
     tileLayers.current = { osm, satelit, google };
     mapRef.current = map;
 
-    // Restore custom layers from Firestore once on mount
-    const loadCustomGeoJSONsFromFirestore = async () => {
-      try {
-        const querySnapshot = await getDocs(collection(db, 'geojson_layers'));
-        querySnapshot.forEach((docSnap) => {
-          const item = docSnap.data();
-          handleAddGeoJSON(item.data, item.name, item.type, false, docSnap.id);
+    // Real-time synchronization of custom GeoJSON layers from Firestore
+    const unsubscribe = onSnapshot(collection(db, 'geojson_layers'), (snapshot) => {
+      const customLayers: LoadedGeoJSON[] = [];
+      snapshot.forEach((docSnap) => {
+        const item = docSnap.data();
+        customLayers.push({
+          id: docSnap.id,
+          name: item.name || '',
+          type: item.type || 'bidang',
+          data: item.data,
+          visible: item.visible !== undefined ? item.visible : true,
+          isDefault: false,
+          fieldMapping: item.fieldMapping || null
         });
-      } catch (err) {
-        console.warn('Gagal memuat GeoJSON dari Firestore:', err);
-      }
-    };
-    loadCustomGeoJSONsFromFirestore();
+      });
+
+      setLoadedGeoJSONs(prev => {
+        const defaults = prev.filter(p => p.isDefault);
+        const customIds = customLayers.map(c => c.id);
+
+        // Remove any deleted layers from Leaflet map
+        prev.forEach(g => {
+          if (!g.isDefault && !customIds.includes(g.id)) {
+            if (mapRef.current && geojsonLayersRef.current[g.id]) {
+              mapRef.current.removeLayer(geojsonLayersRef.current[g.id]);
+              delete geojsonLayersRef.current[g.id];
+            }
+          }
+        });
+
+        return [...defaults, ...customLayers];
+      });
+    }, (err) => {
+      console.warn('Error listening to geojson_layers collection:', err);
+    });
 
     return () => {
+      unsubscribe();
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -476,6 +499,11 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
     }
   };
 
+  const recordsRef = useRef(records);
+  useEffect(() => {
+    recordsRef.current = records;
+  }, [records]);
+
   // Function to remove a GeoJSON layer from the map and state
   const handleRemoveGeoJSON = async (id: string) => {
     const layer = loadedGeoJSONs.find(g => g.id === id);
@@ -487,7 +515,13 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
       }
     }
     if (mapRef.current && geojsonLayersRef.current[id]) {
-      mapRef.current.removeLayer(geojsonLayersRef.current[id]);
+      try {
+        geojsonLayersRef.current[id].eachLayer((l: any) => {
+          l.closeTooltip?.();
+          l.closePopup?.();
+        });
+        mapRef.current.removeLayer(geojsonLayersRef.current[id]);
+      } catch (e) {}
       delete geojsonLayersRef.current[id];
     }
     fittedLayersRef.current = fittedLayersRef.current.filter(fid => fid !== id);
@@ -500,147 +534,173 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
       if (g.id !== id) return g;
       const nextVisible = !g.visible;
       if (mapRef.current && geojsonLayersRef.current[id]) {
-        if (nextVisible) {
-          geojsonLayersRef.current[id].addTo(mapRef.current);
-        } else {
-          mapRef.current.removeLayer(geojsonLayersRef.current[id]);
-        }
+        try {
+          if (nextVisible) {
+            geojsonLayersRef.current[id].addTo(mapRef.current);
+          } else {
+            geojsonLayersRef.current[id].eachLayer((l: any) => {
+              l.closeTooltip?.();
+              l.closePopup?.();
+            });
+            mapRef.current.removeLayer(geojsonLayersRef.current[id]);
+          }
+        } catch (e) {}
       }
       return { ...g, visible: nextVisible };
     }));
   };
 
-  // Render & update Leaflet Layers when loadedGeoJSONs or selectedRecord changes
+  // Render & sync Leaflet GeoJSON Layers with loadedGeoJSONs state
   useEffect(() => {
     if (!mapRef.current) return;
     const map = mapRef.current;
 
-    // Clear old GeoJSON layers first
-    Object.keys(geojsonLayersRef.current).forEach(key => {
-      map.removeLayer(geojsonLayersRef.current[key]);
-    });
-    geojsonLayersRef.current = {};
+    const currentLayerIds = new Set(loadedGeoJSONs.map(g => g.id));
 
-    // Re-add visible layers
-    loadedGeoJSONs.forEach(layer => {
-      if (!layer.visible) return;
-
-      const leafLayer = L.geoJSON(layer.data, {
-        // Point layer style (Towers)
-        pointToLayer: (feature, latlng) => {
-          if (layer.type === 'tower') {
-            const label = getTowerNum(feature.properties, layer) || 'T';
-            const towerHtml = `
-              <div class="flex flex-col items-center">
-                <div class="w-7 h-7 rounded-full bg-indigo-600 border-2 border-white text-white font-bold text-[10px] flex items-center justify-center shadow-lg glow-indigo hover:scale-110 transition-transform">
-                  🗼
-                </div>
-                <div class="mt-0.5 px-1 bg-slate-900/90 text-white font-mono text-[9px] font-bold rounded border border-white/20 whitespace-nowrap shadow-md">
-                  ${label}
-                </div>
-              </div>
-            `;
-            const icon = L.divIcon({
-              html: towerHtml,
-              className: 'custom-tower-marker',
-              iconSize: [40, 40],
-              iconAnchor: [20, 20]
+    // 1. Remove layers that no longer exist in loadedGeoJSONs
+    Object.keys(geojsonLayersRef.current).forEach(id => {
+      if (!currentLayerIds.has(id)) {
+        const layerToRemove = geojsonLayersRef.current[id];
+        if (layerToRemove) {
+          try {
+            layerToRemove.eachLayer((l: any) => {
+              l.closeTooltip?.();
+              l.closePopup?.();
             });
-
-            return L.marker(latlng, { icon });
-          }
-          return L.marker(latlng);
-        },
-
-        // Polygons/LineStrings style
-        style: (feature) => {
-          // Check if this feature matches the currently selected record
-          let isHighlighted = false;
-          if (selectedRecord && layer.type === 'bidang') {
-            const featNobid = getNobidOfBidang(feature.properties, layer);
-            const featDesa = getDesaOfBidang(feature.properties, layer);
-            const featSpan = getSpanOfBidang(feature.properties, layer);
-            
-            const recordNobid = selectedRecord.NOBID || '';
-            const recordDesa = selectedRecord.DESA || '';
-            const recordSpan = selectedRecord.SPAN || '';
-
-            if (isRecordMatched(featNobid, featDesa, featSpan, recordNobid, recordDesa, recordSpan)) {
-              isHighlighted = true;
+            if (map.hasLayer(layerToRemove)) {
+              map.removeLayer(layerToRemove);
             }
-          }
-          return getFeatureStyle(layer.type, isHighlighted);
-        },
+          } catch (e) {}
+          delete geojsonLayersRef.current[id];
+        }
+      }
+    });
 
-        // Interaction logic
-        onEachFeature: (feature, fLayer) => {
-          // Tooltips/Popups
-          const properties = feature.properties || {};
-          let tooltipText = '';
+    // 2. Add or update layers from loadedGeoJSONs
+    loadedGeoJSONs.forEach(layer => {
+      let leafLayer = geojsonLayersRef.current[layer.id];
 
-          if (layer.type === 'tower') {
-            const name = getTowerNum(properties, layer) || 'Tower';
-            tooltipText = `<strong>Tapak Tower: ${name}</strong>`;
-            if (properties.KETERANGAN) tooltipText += `<br/><span class="text-xs">${properties.KETERANGAN}</span>`;
-            fLayer.bindTooltip(tooltipText, { permanent: false, direction: 'top', className: 'custom-map-tooltip' });
-          } else if (layer.type === 'jalur') {
-            const lineName = getJalurName(properties, layer) || 'Jalur ROW';
-            tooltipText = `<strong>${lineName}</strong>`;
-            fLayer.bindTooltip(tooltipText, { className: 'custom-map-tooltip' });
-          } else {
-            // Bidang/Parcel
-            const nobid = getNobidOfBidang(properties, layer) || 'N/A';
-            const owner = getNamaOfBidang(properties, layer) || 'N/A';
-            const desa = getDesaOfBidang(properties, layer) || 'N/A';
-            const span = getSpanOfBidang(properties, layer) || 'N/A';
-
-            tooltipText = `
-              <div class="p-1 text-slate-100 font-sans">
-                <p class="font-bold text-xs border-b border-white/20 pb-1 mb-1 text-indigo-300">Bidang No. ${nobid}</p>
-                <p class="text-[10px]"><span class="text-slate-400">Pemilik:</span> ${owner}</p>
-                <p class="text-[10px]"><span class="text-slate-400">Desa:</span> ${desa}</p>
-                <p class="text-[10px]"><span class="text-slate-400">Span:</span> ${span}</p>
-              </div>
-            `;
-            fLayer.bindTooltip(tooltipText, { className: 'custom-map-tooltip-dark' });
-
-            // Click Handler
-            fLayer.on('click', () => {
-              setSelectedFeatureProps(properties);
-
-              // Auto-zoom closely to the clicked bidang
-              if (mapRef.current) {
-                const anyFLayer = fLayer as any;
-                if (anyFLayer.getBounds) {
-                  mapRef.current.fitBounds(anyFLayer.getBounds(), { padding: [40, 40], maxZoom: 20 });
-                } else if (anyFLayer.getLatLng) {
-                  mapRef.current.setView(anyFLayer.getLatLng(), 20);
-                }
-              }
-
-              // Auto-select corresponding LandRecord if matched
-              const matched = records.find(r => {
-                const recordNobid = r.NOBID || '';
-                const recordDesa = r.DESA || '';
-                const recordSpan = r.SPAN || '';
-
-                return isRecordMatched(nobid, desa, span, recordNobid, recordDesa, recordSpan);
+      if (!leafLayer) {
+        leafLayer = L.geoJSON(layer.data, {
+          // Point layer style (Towers)
+          pointToLayer: (feature, latlng) => {
+            if (layer.type === 'tower') {
+              const label = getTowerNum(feature.properties, layer) || 'T';
+              const towerHtml = `
+                <div class="flex flex-col items-center">
+                  <div class="w-7 h-7 rounded-full bg-indigo-600 border-2 border-white text-white font-bold text-[10px] flex items-center justify-center shadow-lg glow-indigo hover:scale-110 transition-transform">
+                    🗼
+                  </div>
+                  <div class="mt-0.5 px-1 bg-slate-900/90 text-white font-mono text-[9px] font-bold rounded border border-white/20 whitespace-nowrap shadow-md">
+                    ${label}
+                  </div>
+                </div>
+              `;
+              const icon = L.divIcon({
+                html: towerHtml,
+                className: 'custom-tower-marker',
+                iconSize: [40, 40],
+                iconAnchor: [20, 20]
               });
 
-              if (matched) {
-                setSelectedRecord(matched);
-              } else {
-                setSelectedRecord(null);
-              }
-            });
-          }
-        }
-      }).addTo(map);
+              return L.marker(latlng, { icon });
+            }
+            return L.marker(latlng);
+          },
 
-      geojsonLayersRef.current[layer.id] = leafLayer;
+          // Initial style
+          style: (feature) => {
+            return getFeatureStyle(layer.type, false);
+          },
+
+          // Interaction logic
+          onEachFeature: (feature, fLayer) => {
+            const properties = feature.properties || {};
+            let tooltipText = '';
+
+            if (layer.type === 'tower') {
+              const name = getTowerNum(properties, layer) || 'Tower';
+              tooltipText = `<strong>Tapak Tower: ${name}</strong>`;
+              if (properties.KETERANGAN) tooltipText += `<br/><span class="text-xs">${properties.KETERANGAN}</span>`;
+              fLayer.bindTooltip(tooltipText, { permanent: false, direction: 'top', className: 'custom-map-tooltip' });
+            } else if (layer.type === 'jalur') {
+              const lineName = getJalurName(properties, layer) || 'Jalur ROW';
+              tooltipText = `<strong>${lineName}</strong>`;
+              fLayer.bindTooltip(tooltipText, { className: 'custom-map-tooltip' });
+            } else {
+              // Bidang/Parcel
+              const nobid = getNobidOfBidang(properties, layer) || 'N/A';
+              const owner = getNamaOfBidang(properties, layer) || 'N/A';
+              const desa = getDesaOfBidang(properties, layer) || 'N/A';
+              const span = getSpanOfBidang(properties, layer) || 'N/A';
+
+              tooltipText = `
+                <div class="p-1 text-slate-100 font-sans">
+                  <p class="font-bold text-xs border-b border-white/20 pb-1 mb-1 text-indigo-300">Bidang No. ${nobid}</p>
+                  <p class="text-[10px]"><span class="text-slate-400">Pemilik:</span> ${owner}</p>
+                  <p class="text-[10px]"><span class="text-slate-400">Desa:</span> ${desa}</p>
+                  <p class="text-[10px]"><span class="text-slate-400">Span:</span> ${span}</p>
+                </div>
+              `;
+              fLayer.bindTooltip(tooltipText, { className: 'custom-map-tooltip-dark' });
+
+              // Click Handler
+              fLayer.on('click', (e) => {
+                if (e) {
+                  L.DomEvent.stopPropagation(e);
+                }
+                setSelectedFeatureProps(properties);
+
+                // Auto-zoom closely to the clicked bidang
+                if (mapRef.current) {
+                  const anyFLayer = fLayer as any;
+                  try {
+                    if (anyFLayer.getBounds) {
+                      mapRef.current.fitBounds(anyFLayer.getBounds(), { padding: [40, 40], maxZoom: 20 });
+                    } else if (anyFLayer.getLatLng) {
+                      mapRef.current.setView(anyFLayer.getLatLng(), 20);
+                    }
+                  } catch (err) {}
+                }
+
+                // Auto-select corresponding LandRecord if matched using latest records ref
+                const currentRecords = recordsRef.current || [];
+                const matched = currentRecords.find(r => {
+                  const recordNobid = r.NOBID || '';
+                  const recordDesa = r.DESA || '';
+                  const recordSpan = r.SPAN || '';
+
+                  return isRecordMatched(nobid, desa, span, recordNobid, recordDesa, recordSpan);
+                });
+
+                setSelectedRecord(matched || null);
+              });
+            }
+          }
+        });
+
+        geojsonLayersRef.current[layer.id] = leafLayer;
+      }
+
+      // Sync layer visibility on map
+      if (layer.visible) {
+        if (!map.hasLayer(leafLayer)) {
+          leafLayer.addTo(map);
+        }
+      } else {
+        if (map.hasLayer(leafLayer)) {
+          try {
+            leafLayer.eachLayer((l: any) => {
+              l.closeTooltip?.();
+              l.closePopup?.();
+            });
+            map.removeLayer(leafLayer);
+          } catch (e) {}
+        }
+      }
     });
 
-    // Fit map bounds to loaded layers only when they are first added (prevent resetting zoom when selecting record)
+    // Fit map bounds to loaded layers only when they are first added
     const visibleLayers = Object.values(geojsonLayersRef.current);
     const newLayerIds = loadedGeoJSONs.filter(g => g.visible && !fittedLayersRef.current.includes(g.id)).map(g => g.id);
     
@@ -656,8 +716,38 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
         // Safe check for geometry issues
       }
     }
+  }, [loadedGeoJSONs]);
 
-  }, [loadedGeoJSONs, selectedRecord, records]);
+  // Update styles when selectedRecord changes without destroying Leaflet layers
+  useEffect(() => {
+    Object.keys(geojsonLayersRef.current).forEach(key => {
+      const geojsonLayer = geojsonLayersRef.current[key];
+      const layerObj = loadedGeoJSONs.find(l => l.id === key);
+      if (!geojsonLayer || !layerObj || layerObj.type === 'tower') return;
+
+      geojsonLayer.eachLayer((subLayer: any) => {
+        if (typeof subLayer.setStyle === 'function' && subLayer.feature) {
+          let isHighlighted = false;
+          if (selectedRecord && layerObj.type === 'bidang') {
+            const featNobid = getNobidOfBidang(subLayer.feature.properties, layerObj);
+            const featDesa = getDesaOfBidang(subLayer.feature.properties, layerObj);
+            const featSpan = getSpanOfBidang(subLayer.feature.properties, layerObj);
+            
+            const recordNobid = selectedRecord.NOBID || '';
+            const recordDesa = selectedRecord.DESA || '';
+            const recordSpan = selectedRecord.SPAN || '';
+
+            if (isRecordMatched(featNobid, featDesa, featSpan, recordNobid, recordDesa, recordSpan)) {
+              isHighlighted = true;
+            }
+          }
+          try {
+            subLayer.setStyle(getFeatureStyle(layerObj.type, isHighlighted));
+          } catch (e) {}
+        }
+      });
+    });
+  }, [selectedRecord, loadedGeoJSONs]);
 
   // Center on map helper
   const handleSelectRecord = (record: LandRecord) => {
@@ -786,41 +876,8 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
         </div>
       </div>
 
-      {/* Sub Menu / Tab Selector */}
-      <div className="flex items-center gap-2 border-b border-white/10 pb-0.5">
-        <button
-          onClick={() => setActiveSubTab('peta')}
-          className={`px-4 py-2.5 text-sm font-bold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
-            activeSubTab === 'peta'
-              ? 'border-indigo-500 text-indigo-300 bg-indigo-500/5 rounded-t-xl'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <MapIcon className="w-4 h-4 text-indigo-400" />
-          Peta & Navigasi Spasial
-        </button>
-        {role !== 'GUEST' && (
-          <button
-            onClick={() => setActiveSubTab('geojson')}
-            className={`px-4 py-2.5 text-sm font-bold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
-              activeSubTab === 'geojson'
-                ? 'border-indigo-500 text-indigo-300 bg-indigo-500/5 rounded-t-xl'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Layers className="w-4 h-4 text-indigo-400" />
-            Manajemen Berkas GeoJSON
-            {loadedGeoJSONs.length > 0 && (
-              <span className="bg-indigo-500/20 text-indigo-300 text-[10px] px-1.5 py-0.5 rounded-full border border-indigo-500/30">
-                {loadedGeoJSONs.length}
-              </span>
-            )}
-          </button>
-        )}
-      </div>
-
-      {/* Tab: Peta & Navigasi Spasial */}
-      <div className={activeSubTab === 'peta' ? 'space-y-6 block' : 'hidden'}>
+      {/* Peta & Navigasi Spasial */}
+      <div className="space-y-6">
         {/* Main Map Split Container */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
@@ -1081,356 +1138,6 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
           )}
         </div>
       </div>
-
-      {/* Tab: Manajemen Berkas GeoJSON */}
-      <div className={activeSubTab === 'geojson' ? 'glass-card p-6 rounded-2xl shadow-xl border border-white/10 space-y-6 animate-fadeIn block' : 'hidden'}>
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Layers className="w-5 h-5 text-indigo-400" />
-              Manajemen File GeoJSON
-            </h2>
-            <p className="text-xs text-slate-400 mt-1">Unggah, aktifkan, atau atur pemetaan kolom atribut file spasial Anda.</p>
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-slate-400">
-            <HelpCircle className="w-4 h-4 text-slate-500" />
-            <span>Simpan file GeoJSON Anda di folder <code>/public/geojson/</code></span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          
-          {/* Card upload Bidang */}
-          <div className="p-4 bg-slate-900/40 rounded-xl border border-white/5 flex flex-col justify-between space-y-3">
-            <div>
-              <h4 className="text-xs font-bold text-emerald-300">1. GeoJSON Bidang Tanah</h4>
-              <p className="text-[11px] text-slate-400 mt-0.5">Poligon bidang per-desa/per-jalur untuk memetakan kepemilikan lahan.</p>
-            </div>
-            <label className="px-3 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-white rounded-lg text-xs font-semibold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md">
-              <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
-              Unggah Bidang
-              <input type="file" accept=".geojson,application/json" onChange={(e) => handleFileUpload(e, 'bidang')} className="hidden" />
-            </label>
-          </div>
-
-          {/* Card upload Jalur */}
-          <div className="p-4 bg-slate-900/40 rounded-xl border border-white/5 flex flex-col justify-between space-y-3">
-            <div>
-              <h4 className="text-xs font-bold text-orange-300">2. GeoJSON Jalur Corridor</h4>
-              <p className="text-[11px] text-slate-400 mt-0.5">Garis koridor/buffer bebas hambatan ROW transmisi 150 kV.</p>
-            </div>
-            <label className="px-3 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-white rounded-lg text-xs font-semibold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md">
-              <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
-              Unggah Jalur
-              <input type="file" accept=".geojson,application/json" onChange={(e) => handleFileUpload(e, 'jalur')} className="hidden" />
-            </label>
-          </div>
-
-          {/* Card upload Tower */}
-          <div className="p-4 bg-slate-900/40 rounded-xl border border-white/5 flex flex-col justify-between space-y-3">
-            <div>
-              <h4 className="text-xs font-bold text-indigo-300">3. GeoJSON Tapak Tower</h4>
-              <p className="text-[11px] text-slate-400 mt-0.5">Titik posisi koordinat tower penyangga lengkap dengan label nomor tower.</p>
-            </div>
-            <label className="px-3 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-white rounded-lg text-xs font-semibold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md">
-              <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
-              Unggah Tower
-              <input type="file" accept=".geojson,application/json" onChange={(e) => handleFileUpload(e, 'tower')} className="hidden" />
-            </label>
-          </div>
-
-        </div>
-
-        {/* List of currently loaded GeoJSONs */}
-        {loadedGeoJSONs.length > 0 ? (
-          <div className="border-t border-white/10 pt-5 space-y-3">
-            <h3 className="text-xs font-bold text-white uppercase tracking-wider">File Terpasang di Peta ({loadedGeoJSONs.length})</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {loadedGeoJSONs.map((g) => (
-                <div key={g.id} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 text-xs">
-                  <div className="flex items-center gap-2.5 overflow-hidden mr-2">
-                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                      g.type === 'bidang' ? 'bg-emerald-450' : g.type === 'jalur' ? 'bg-orange-500' : 'bg-indigo-500'
-                    }`} />
-                    <span className="text-slate-200 font-medium truncate" title={g.name}>{g.name}</span>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={() => {
-                        setTempMapping(g.fieldMapping || {
-                          desa: '',
-                          span: '',
-                          nobid: '',
-                          nama: '',
-                          tower: '',
-                          jalurName: ''
-                        });
-                        setConfiguringLayer(g);
-                      }}
-                      className="p-1.5 text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 rounded transition-colors"
-                      title="Atur Pemetaan Kolom Atribut"
-                    >
-                      <Layers className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleToggleVisibility(g.id)}
-                      className={`px-2.5 py-1 rounded text-xs font-bold ${
-                        g.visible ? 'bg-indigo-500/20 text-indigo-300' : 'bg-slate-850 text-slate-500'
-                      }`}
-                    >
-                      {g.visible ? 'Sembunyikan' : 'Tampilkan'}
-                    </button>
-                    <button
-                      onClick={() => handleRemoveGeoJSON(g.id)}
-                      className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="border-t border-white/10 pt-6 py-8 text-center text-slate-500 text-xs">
-            Belum ada file GeoJSON eksternal yang diunggah. Gunakan tombol di atas untuk mengunggah file lokal Anda.
-          </div>
-        )}
-
-        {/* Panduan Integrasi Permanen untuk Tamu */}
-        <div className="mt-6 p-5 bg-indigo-500/5 rounded-2xl border border-indigo-500/25 space-y-3.5">
-          <div className="flex items-start gap-3">
-            <div className="p-2 bg-indigo-600/20 text-indigo-300 rounded-lg shrink-0 mt-0.5">
-              <Globe className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="text-xs font-bold text-indigo-300 uppercase tracking-wider">💡 Bagaimana cara memisahkan file GeoJSON antar proyek agar tampil otomatis untuk Tamu?</h3>
-              <p className="text-xs text-slate-300 mt-1">
-                Aplikasi ini mendukung <strong>multi-proyek/jalur yang independen</strong>. Agar tamu proyek tertentu langsung melihat jalurnya sendiri tanpa tercampur dengan proyek lain, gunakan format penamaan file berbasis nama proyek/jalur di bawah ini:
-              </p>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pl-0 md:pl-11 text-xs">
-            <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5 space-y-1">
-              <span className="font-bold text-indigo-400">Langkah 1: Letakkan File</span>
-              <p className="text-[11px] text-slate-300">
-                Letakkan file GeoJSON Anda di folder publik proyek Anda di path:
-                <code className="block mt-1 p-1 bg-slate-950 rounded text-[10px] text-amber-300 border border-white/5 font-mono select-all">/public/geojson/</code>
-              </p>
-            </div>
-            <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5 space-y-1">
-              <span className="font-bold text-indigo-400">Langkah 2: Penamaan File ({activeProjectName || 'Pilih Proyek'})</span>
-              <p className="text-[11px] text-slate-300">
-                Ubah nama file GeoJSON sesuai nama proyek aktif agar termuat otomatis:
-                <span className="block mt-1.5 space-y-1 text-[10px] font-mono text-indigo-300">
-                  • <strong>Bidang:</strong> <code className="text-amber-200 block bg-slate-950 p-1 rounded border border-white/5 font-mono select-all truncate">{(activeProjectName || 'PROYEK_ANDA')}_BIDANG_WARGA.geojson</code>
-                  • <strong>Jalur:</strong> <code className="text-amber-200 block bg-slate-950 p-1 rounded border border-white/5 font-mono select-all truncate">{(activeProjectName || 'PROYEK_ANDA')}_JALUR_UTUH.geojson</code>
-                  • <strong>Tower:</strong> <code className="text-amber-200 block bg-slate-950 p-1 rounded border border-white/5 font-mono select-all truncate">{(activeProjectName || 'PROYEK_ANDA')}_TAPAK_TOWER.geojson</code>
-                </span>
-                <span className="text-[9px] text-slate-400 block mt-1.5">
-                  *Gunakan format default jika ingin dijadikan fallback global (misal: <code className="text-indigo-200">bidang_tanah.geojson</code>).
-                </span>
-              </p>
-            </div>
-            <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5 space-y-1">
-              <span className="font-bold text-indigo-400">Langkah 3: Deploy</span>
-              <p className="text-[11px] text-slate-300">
-                Lakukan <strong>Deploy Ulang</strong> aplikasi Anda. Setelah terdeploy, sistem akan otomatis mengenali nama proyek yang dipilih tamu dan memuat file GeoJSON yang sesuai secara independen tanpa tercampur!
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Dynamic Column Mapping Configuration Modal */}
-      {configuringLayer && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-scaleUp">
-            
-            {/* Modal Header */}
-            <div className="p-5 border-b border-white/10 flex items-center justify-between bg-slate-950/40">
-              <div className="flex items-center gap-2">
-                <Layers className="w-5 h-5 text-indigo-400" />
-                <div>
-                  <h3 className="font-bold text-white text-sm">Pemetaan Kolom Atribut GIS</h3>
-                  <p className="text-[11px] text-slate-400 truncate max-w-[280px]">{configuringLayer.name}</p>
-                </div>
-              </div>
-              <button 
-                onClick={() => setConfiguringLayer(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5 transition-all cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Modal Content */}
-            <div className="p-5 space-y-4">
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Pilih nama field (kolom) dari file GeoJSON Anda yang menyimpan data berikut untuk dicocokkan dengan database aplikasi secara real-time.
-              </p>
-
-              {/* List of fields in GeoJSON to show for reference */}
-              <div className="bg-slate-950 p-3 rounded-xl border border-white/5">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Kolom Tersedia di File:</p>
-                <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto scrollbar-thin">
-                  {getGeoJSONKeys(configuringLayer.data).map(key => (
-                    <span key={key} className="text-[9px] font-mono px-1.5 py-0.5 bg-white/5 text-indigo-300 rounded border border-white/5">
-                      {key}
-                    </span>
-                  ))}
-                  {getGeoJSONKeys(configuringLayer.data).length === 0 && (
-                    <span className="text-[10px] text-slate-500 font-mono">Tidak ada kolom ditemukan</span>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-3.5">
-                {configuringLayer.type === 'bidang' && (
-                  <>
-                    {/* Desa */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-bold text-slate-300 flex justify-between">
-                        <span>Nama Desa / Kelurahan:</span>
-                        <span className="text-emerald-400 font-normal text-[10px]">Auto-detect fallback</span>
-                      </label>
-                      <select
-                        value={tempMapping.desa || ''}
-                        onChange={(e) => setTempMapping({ ...tempMapping, desa: e.target.value })}
-                        className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
-                      >
-                        <option value="">-- Gunakan Auto-Detect --</option>
-                        {getGeoJSONKeys(configuringLayer.data).map(key => (
-                          <option key={key} value={key}>{key}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Span */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-bold text-slate-300 flex justify-between">
-                        <span>Span / Section (T.xx-T.xx):</span>
-                        <span className="text-emerald-400 font-normal text-[10px]">Auto-detect fallback</span>
-                      </label>
-                      <select
-                        value={tempMapping.span || ''}
-                        onChange={(e) => setTempMapping({ ...tempMapping, span: e.target.value })}
-                        className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
-                      >
-                        <option value="">-- Gunakan Auto-Detect --</option>
-                        {getGeoJSONKeys(configuringLayer.data).map(key => (
-                          <option key={key} value={key}>{key}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Nobid */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-bold text-slate-300 flex justify-between">
-                        <span>Nomor Bidang Tanah (NOBID):</span>
-                        <span className="text-emerald-400 font-normal text-[10px]">Auto-detect fallback</span>
-                      </label>
-                      <select
-                        value={tempMapping.nobid || ''}
-                        onChange={(e) => setTempMapping({ ...tempMapping, nobid: e.target.value })}
-                        className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
-                      >
-                        <option value="">-- Gunakan Auto-Detect --</option>
-                        {getGeoJSONKeys(configuringLayer.data).map(key => (
-                          <option key={key} value={key}>{key}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Nama Pemilik */}
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-bold text-slate-300 flex justify-between">
-                        <span>Nama Pemilik (Nama Final):</span>
-                        <span className="text-emerald-400 font-normal text-[10px]">Auto-detect fallback</span>
-                      </label>
-                      <select
-                        value={tempMapping.nama || ''}
-                        onChange={(e) => setTempMapping({ ...tempMapping, nama: e.target.value })}
-                        className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
-                      >
-                        <option value="">-- Gunakan Auto-Detect --</option>
-                        {getGeoJSONKeys(configuringLayer.data).map(key => (
-                          <option key={key} value={key}>{key}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </>
-                )}
-
-                {configuringLayer.type === 'tower' && (
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-300 flex justify-between">
-                      <span>Nomor / Label Tower (towernumb):</span>
-                      <span className="text-indigo-400 font-normal text-[10px]">Auto-detect fallback</span>
-                    </label>
-                    <select
-                      value={tempMapping.tower || ''}
-                      onChange={(e) => setTempMapping({ ...tempMapping, tower: e.target.value })}
-                      className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
-                    >
-                      <option value="">-- Gunakan Auto-Detect --</option>
-                      {getGeoJSONKeys(configuringLayer.data).map(key => (
-                        <option key={key} value={key}>{key}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {configuringLayer.type === 'jalur' && (
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-300 flex justify-between">
-                      <span>Nama Jalur / Koridor:</span>
-                      <span className="text-orange-400 font-normal text-[10px]">Auto-detect fallback</span>
-                    </label>
-                    <select
-                      value={tempMapping.jalurName || ''}
-                      onChange={(e) => setTempMapping({ ...tempMapping, jalurName: e.target.value })}
-                      className="w-full px-3 py-2 bg-slate-950 border border-white/10 text-slate-200 rounded-xl text-xs focus:outline-none focus:border-indigo-500"
-                    >
-                      <option value="">-- Gunakan Auto-Detect --</option>
-                      {getGeoJSONKeys(configuringLayer.data).map(key => (
-                        <option key={key} value={key}>{key}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-4 border-t border-white/10 bg-slate-950/40 flex items-center justify-end gap-2.5">
-              <button
-                onClick={() => setConfiguringLayer(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer transition-all"
-              >
-                Batal
-              </button>
-              <button
-                onClick={() => {
-                  setLoadedGeoJSONs(prev => prev.map(g => {
-                    if (g.id === configuringLayer.id) {
-                      return { ...g, fieldMapping: tempMapping };
-                    }
-                    return g;
-                  }));
-                  setConfiguringLayer(null);
-                }}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-550 text-white rounded-xl text-xs font-bold shadow-md cursor-pointer transition-all"
-              >
-                Simpan Pemetaan
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }

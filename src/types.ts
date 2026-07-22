@@ -84,6 +84,8 @@ export interface LandRecord {
   LINK_KLAIM_BANGUNAN: string;
   LINK_DOKUMEN_LAIN: string;
   LINK_DOKUMENTASI_BIDANG: string;
+  LINK_DOKUMENTASI_BIDANG_2: string;
+  LINK_DOKUMENTASI_BIDANG_3: string;
   LINK_WAJAH_PEMILIK: string;
   DRIVE_FOLDER_ID: string;
   
@@ -141,7 +143,7 @@ export const getSheetHeaders = (): string[] => {
     "LINK_KTP", "LINK_KK", "LINK_ALAS_HAK", "LINK_PERALIHAN_HAK",
     "QC_STATUS", "QC_NOTES", "QC_BY", "QC_DATE", "ID_UNIK", "JENIS_PERALIHAN_HAK",
     "LINK_JUAL_BELI", "LINK_KETERANGAN_WARIS", "LINK_KUASA_WARIS", "LINK_SURAT_KUASA", "LINK_KET_BEDA_NAMA", "LINK_WAKAF", "LINK_KLAIM_TANAMAN", "LINK_KLAIM_BANGUNAN", "LINK_DOKUMEN_LAIN",
-    "LINK_DOKUMENTASI_BIDANG", "LINK_WAJAH_PEMILIK", "DRIVE_FOLDER_ID",
+    "LINK_DOKUMENTASI_BIDANG", "LINK_DOKUMENTASI_BIDANG_2", "LINK_DOKUMENTASI_BIDANG_3", "LINK_WAJAH_PEMILIK", "DRIVE_FOLDER_ID",
     "BATAS_UTARA", "BATAS_SELATAN", "BATAS_TIMUR", "BATAS_BARAT"
   ];
 
@@ -229,6 +231,8 @@ export const recordToRow = (record: LandRecord): string[] => {
     record.LINK_KLAIM_BANGUNAN || "",
     record.LINK_DOKUMEN_LAIN || "",
     record.LINK_DOKUMENTASI_BIDANG || "",
+    record.LINK_DOKUMENTASI_BIDANG_2 || "",
+    record.LINK_DOKUMENTASI_BIDANG_3 || "",
     record.LINK_WAJAH_PEMILIK || "",
     record.DRIVE_FOLDER_ID || "",
     record.BATAS_UTARA || "",
@@ -353,13 +357,15 @@ export const rowToRecord = (row: any[], index?: number): LandRecord => {
   record.LINK_KLAIM_BANGUNAN = getVal(adminStartIdx + 32);
   record.LINK_DOKUMEN_LAIN = getVal(adminStartIdx + 33);
   record.LINK_DOKUMENTASI_BIDANG = getVal(adminStartIdx + 34);
-  record.LINK_WAJAH_PEMILIK = getVal(adminStartIdx + 35);
-  record.DRIVE_FOLDER_ID = getVal(adminStartIdx + 36);
+  record.LINK_DOKUMENTASI_BIDANG_2 = getVal(adminStartIdx + 35);
+  record.LINK_DOKUMENTASI_BIDANG_3 = getVal(adminStartIdx + 36);
+  record.LINK_WAJAH_PEMILIK = getVal(adminStartIdx + 37);
+  record.DRIVE_FOLDER_ID = getVal(adminStartIdx + 38);
 
-  record.BATAS_UTARA = getVal(adminStartIdx + 37);
-  record.BATAS_SELATAN = getVal(adminStartIdx + 38);
-  record.BATAS_TIMUR = getVal(adminStartIdx + 39);
-  record.BATAS_BARAT = getVal(adminStartIdx + 40);
+  record.BATAS_UTARA = getVal(adminStartIdx + 39);
+  record.BATAS_SELATAN = getVal(adminStartIdx + 40);
+  record.BATAS_TIMUR = getVal(adminStartIdx + 41);
+  record.BATAS_BARAT = getVal(adminStartIdx + 42);
 
   return record as LandRecord;
 };
@@ -395,6 +401,8 @@ export const createEmptyRecord = (): LandRecord => {
     LINK_KLAIM_BANGUNAN: "",
     LINK_DOKUMEN_LAIN: "",
     LINK_DOKUMENTASI_BIDANG: "",
+    LINK_DOKUMENTASI_BIDANG_2: "",
+    LINK_DOKUMENTASI_BIDANG_3: "",
     LINK_WAJAH_PEMILIK: "",
     DRIVE_FOLDER_ID: "",
     BATAS_UTARA: "",
@@ -428,7 +436,7 @@ export interface OperatorConfig {
   username: string;
   password?: string; // Stored in plain text for simplicity as requested/used in this admin setup
   name: string;
-  role: 'FIELD' | 'QC';
+  role: 'ADMIN' | 'FIELD' | 'QC';
   projectId: string; // The specific project ID they are restricted to (or 'all')
   createdAt: number;
 }

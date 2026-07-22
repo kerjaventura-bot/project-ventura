@@ -32,6 +32,8 @@ type DocType =
   | 'Klaim_Bangunan'
   | 'Dokumen_Lain'
   | 'Dokumentasi_Bidang'
+  | 'Dokumentasi_Bidang_2'
+  | 'Dokumentasi_Bidang_3'
   | 'Wajah_Pemilik';
 
 interface DocTypeConfig {
@@ -123,8 +125,10 @@ export default function DocUpload({
   ];
 
   const photoDocumentSlots: DocTypeConfig[] = [
-    { key: 'LINK_DOKUMENTASI_BIDANG', label: 'Foto Dokumentasi Bidang', description: 'Foto/Gambar (JPG, JPEG, PNG) atau PDF dokumentasi kondisi fisik di lokasi bidang tanah.', docType: 'Dokumentasi_Bidang' },
-    { key: 'LINK_WAJAH_PEMILIK', label: 'Foto Wajah Pemilik', description: 'Foto/Gambar (JPG, JPEG, PNG) atau PDF wajah dari pemilik lahan atau ahli waris.', docType: 'Wajah_Pemilik' }
+    { key: 'LINK_DOKUMENTASI_BIDANG', label: 'Foto Kondisi Bidang Lahan 1', description: 'Foto/Gambar (JPG, JPEG, PNG) atau PDF kondisi fisik bidang tanah lokasi 1.', docType: 'Dokumentasi_Bidang' },
+    { key: 'LINK_DOKUMENTASI_BIDANG_2', label: 'Foto Kondisi Bidang Lahan 2', description: 'Foto/Gambar (JPG, JPEG, PNG) atau PDF kondisi fisik bidang tanah lokasi 2.', docType: 'Dokumentasi_Bidang_2' },
+    { key: 'LINK_DOKUMENTASI_BIDANG_3', label: 'Foto Kondisi Bidang Lahan 3', description: 'Foto/Gambar (JPG, JPEG, PNG) atau PDF kondisi fisik bidang tanah lokasi 3.', docType: 'Dokumentasi_Bidang_3' },
+    { key: 'LINK_WAJAH_PEMILIK', label: 'Foto Wajah Pemilik / Patok', description: 'Foto/Gambar (JPG, JPEG, PNG) atau PDF wajah dari pemilik lahan / patok.', docType: 'Wajah_Pemilik' }
   ];
 
   // Selected Record details
@@ -168,7 +172,7 @@ export default function DocUpload({
     }
 
     // Validation for KTP, Dokumentasi_Bidang, and Wajah_Pemilik can be PDF or Image (JPEG/JPG/PNG)
-    if (docType === 'KTP' || docType === 'Dokumentasi_Bidang' || docType === 'Wajah_Pemilik') {
+    if (docType === 'KTP' || docType.startsWith('Dokumentasi_Bidang') || docType === 'Wajah_Pemilik') {
       const allowedTypes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
       if (!allowedTypes.includes(file.type)) {
         setStatusMessage({ type: 'error', text: `Format ${docType.replace('_', ' ')} harus berupa PDF atau Gambar (JPG, JPEG, PNG).` });
@@ -189,9 +193,10 @@ export default function DocUpload({
       const mainFolderId = uploadsFolderId || await findOrCreateFolder(accessToken, "SIP_Berkas_Pertanahan_Desa");
       
       // 2. Find or create subfolder matching record with unique id prefix (e.g. ID-8F9G2H_KUTA-12-4)
-      // Check if there is already a locked Google Drive Folder ID
+      // Check if there is already a locked valid Google Drive Folder ID
       let subFolderId = selectedRecord.DRIVE_FOLDER_ID;
-      if (!subFolderId) {
+      const isValidSubFolderId = subFolderId && typeof subFolderId === 'string' && /^[a-zA-Z0-9_-]{15,60}$/.test(subFolderId.trim());
+      if (!isValidSubFolderId) {
         const subFolderName = selectedRecord.CODE.replace(/[\/\\?%*:|"<>\s]/g, '-');
         subFolderId = await findOrCreateFolder(accessToken, subFolderName, mainFolderId, selectedRecord.ID_UNIK);
       }
@@ -227,6 +232,8 @@ export default function DocUpload({
       else if (docType === 'Klaim_Bangunan') updatedRecord.LINK_KLAIM_BANGUNAN = uploadResult.webViewLink;
       else if (docType === 'Dokumen_Lain') updatedRecord.LINK_DOKUMEN_LAIN = uploadResult.webViewLink;
       else if (docType === 'Dokumentasi_Bidang') updatedRecord.LINK_DOKUMENTASI_BIDANG = uploadResult.webViewLink;
+      else if (docType === 'Dokumentasi_Bidang_2') updatedRecord.LINK_DOKUMENTASI_BIDANG_2 = uploadResult.webViewLink;
+      else if (docType === 'Dokumentasi_Bidang_3') updatedRecord.LINK_DOKUMENTASI_BIDANG_3 = uploadResult.webViewLink;
       else if (docType === 'Wajah_Pemilik') updatedRecord.LINK_WAJAH_PEMILIK = uploadResult.webViewLink;
 
       // 5. Update parent records & save to Google Sheets
@@ -449,7 +456,7 @@ export default function DocUpload({
                   r.LINK_JUAL_BELI, r.LINK_KETERANGAN_WARIS, r.LINK_KUASA_WARIS,
                   r.LINK_SURAT_KUASA, r.LINK_KET_BEDA_NAMA, r.LINK_WAKAF,
                   r.LINK_KLAIM_TANAMAN, r.LINK_KLAIM_BANGUNAN, r.LINK_DOKUMEN_LAIN,
-                  r.LINK_DOKUMENTASI_BIDANG, r.LINK_WAJAH_PEMILIK
+                  r.LINK_DOKUMENTASI_BIDANG, r.LINK_DOKUMENTASI_BIDANG_2, r.LINK_DOKUMENTASI_BIDANG_3, r.LINK_WAJAH_PEMILIK
                 ].filter(Boolean).length;
                 
                 return (
@@ -617,7 +624,7 @@ export default function DocUpload({
                   const isSlotUploading = uploadingType === slotDocType;
                   
                   // Accept PDF or images for KTP, Dokumentasi_Bidang, and Wajah_Pemilik
-                  const isImageAndPdf = slot.key === 'LINK_KTP' || slot.key === 'LINK_DOKUMENTASI_BIDANG' || slot.key === 'LINK_WAJAH_PEMILIK';
+                  const isImageAndPdf = slot.key === 'LINK_KTP' || String(slot.key).startsWith('LINK_DOKUMENTASI_BIDANG') || slot.key === 'LINK_WAJAH_PEMILIK';
                   const acceptTypes = isImageAndPdf 
                     ? 'application/pdf,image/jpeg,image/jpg,image/png' 
                     : 'application/pdf';

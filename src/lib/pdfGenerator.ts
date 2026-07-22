@@ -1,5 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { type LandRecord } from '../types';
+import { db } from './firebase';
+import { collection, getDocs } from 'firebase/firestore';
 
 const normalizeString = (val: string): string => {
   return String(val || '').trim().toLowerCase();
@@ -96,53 +98,150 @@ function latLngToUTM49S(lng: number, lat: number): { x: number; y: number } {
 }
 
 /**
+ * Converts a Google Drive URL or standard URL into embeddable direct image URLs.
+ */
+function getDirectImageUrls(url: string): string[] {
+  if (!url || typeof url !== 'string') return [];
+  const trimmed = url.trim();
+  if (!trimmed) return [];
+  
+  if (trimmed.startsWith('data:image/') || trimmed.startsWith('blob:')) {
+    return [trimmed];
+  }
+
+  let fileId = '';
+  const dMatch = trimmed.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (dMatch && dMatch[1]) {
+    fileId = dMatch[1];
+  } else {
+    const idMatch = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (idMatch && idMatch[1]) {
+      fileId = idMatch[1];
+    }
+  }
+
+  if (fileId) {
+    return [
+      `https://lh3.googleusercontent.com/d/${fileId}`,
+      `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
+      `https://drive.google.com/uc?export=view&id=${fileId}`,
+      trimmed
+    ];
+  }
+
+  return [trimmed];
+}
+
+/**
  * Helper to load an image from URL, resize it to a maximum width to reduce file size, and return its Base64 representation.
  */
-async function loadImageAsBase64(url: string, maxWidth: number = 400): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        let w = img.width;
-        let h = img.height;
-        
-        if (w > maxWidth) {
-          h = Math.round((h * maxWidth) / w);
-          w = maxWidth;
+async function loadImageAsBase64(url: string, maxWidth: number = 800, isLogo: boolean = false): Promise<string> {
+  if (!url) return '';
+  const candidateUrls = getDirectImageUrls(url);
+  if (candidateUrls.length === 0) return '';
+
+  for (const srcUrl of candidateUrls) {
+    if (srcUrl.startsWith('data:image/')) return srcUrl;
+
+    const result = await new Promise<string>((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          let w = img.width || 400;
+          let h = img.height || 300;
+          
+          if (w > maxWidth) {
+            h = Math.round((h * maxWidth) / w);
+            w = maxWidth;
+          }
+          
+          canvas.width = Math.max(w, 1);
+          canvas.height = Math.max(h, 1);
+          
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve('');
+            return;
+          }
+          
+          // Fill pure white background first so transparent PNG logos render on white background, not black!
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, w, h);
+
+          ctx.drawImage(img, 0, 0, w, h);
+          if (isLogo) {
+            resolve(canvas.toDataURL('image/png'));
+          } else {
+            // Compress photos with high-efficiency JPEG format
+            resolve(canvas.toDataURL('image/jpeg', 0.72));
+          }
+        } catch (err) {
+          console.warn('Canvas image drawing error:', err);
+          resolve('');
         }
-        
-        canvas.width = w;
-        canvas.height = h;
-        
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          // Fallback to original Base64 if canvas context fails
-          fetch(url)
-            .then(res => res.blob())
-            .then(blob => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result as string);
-              reader.onerror = () => resolve('');
-              reader.readAsDataURL(blob);
-            })
-            .catch(() => resolve(''));
-          return;
+      };
+      img.onerror = () => resolve('');
+      img.src = srcUrl;
+    });
+
+    if (result && result.startsWith('data:image/')) {
+      return result;
+    }
+  }
+
+  // Fallback: try direct fetch as Blob -> FileReader with canvas compression
+  for (const srcUrl of candidateUrls) {
+    try {
+      const res = await fetch(srcUrl);
+      if (res.ok) {
+        const blob = await res.blob();
+        if (blob.type.startsWith('image/')) {
+          const blobUrl = URL.createObjectURL(blob);
+          const compressed = await new Promise<string>((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+              try {
+                const canvas = document.createElement('canvas');
+                let w = img.width || 400;
+                let h = img.height || 300;
+                if (w > maxWidth) {
+                  h = Math.round((h * maxWidth) / w);
+                  w = maxWidth;
+                }
+                canvas.width = Math.max(w, 1);
+                canvas.height = Math.max(h, 1);
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                  ctx.fillStyle = '#FFFFFF';
+                  ctx.fillRect(0, 0, w, h);
+                  ctx.drawImage(img, 0, 0, w, h);
+                  if (isLogo) {
+                    resolve(canvas.toDataURL('image/png'));
+                  } else {
+                    resolve(canvas.toDataURL('image/jpeg', 0.72));
+                  }
+                  return;
+                }
+              } catch (e) {}
+              resolve('');
+            };
+            img.onerror = () => resolve('');
+            img.src = blobUrl;
+          });
+          URL.revokeObjectURL(blobUrl);
+          if (compressed && compressed.startsWith('data:image/')) {
+            return compressed;
+          }
         }
-        
-        ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/png'));
-      } catch (err) {
-        console.warn('Canvas resizing failed, falling back:', err);
-        resolve('');
       }
-    };
-    img.onerror = () => {
-      resolve('');
-    };
-    img.src = url;
-  });
+    } catch {
+      // ignore fetch errors
+    }
+  }
+
+  return '';
 }
 
 /**
@@ -159,25 +258,25 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
   const rightMargin = 195;
   const contentWidth = rightMargin - leftMargin; // 180mm
 
-  // Preload logo images
+  // Preload logo images with crisp resolution
   let danantaraBase64 = '';
   let idsurveyBase64 = '';
   let surveyorBase64 = '';
 
   try {
-    danantaraBase64 = await loadImageAsBase64('/danantara.png');
+    danantaraBase64 = await loadImageAsBase64('/danantara.png', 500, true);
   } catch (e) {
     console.warn('Failed to load danantara.png:', e);
   }
 
   try {
-    idsurveyBase64 = await loadImageAsBase64('/idsurvey.png');
+    idsurveyBase64 = await loadImageAsBase64('/idsurvey.png', 500, true);
   } catch (e) {
     console.warn('Failed to load idsurvey.png:', e);
   }
 
   try {
-    surveyorBase64 = await loadImageAsBase64('/surveyor.png');
+    surveyorBase64 = await loadImageAsBase64('/surveyor.png', 500, true);
   } catch (e) {
     console.warn('Failed to load surveyor.png:', e);
   }
@@ -208,7 +307,7 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
     // 1. Danantara Indonesia Logo (Left side)
     if (danantaraBase64) {
       // ratio: 3.798. height: 8.5mm, width: 8.5 * 3.798 = 32.28mm.
-      doc.addImage(danantaraBase64, 'PNG', 15, 10.5, 32.28, 8.5, undefined, 'FAST');
+      doc.addImage(danantaraBase64, 'PNG', 15, 10.5, 32.28, 8.5, undefined, 'NONE');
     } else {
       // Draw a premium gold & crimson corporate crest
       doc.setFillColor(178, 34, 34); // Crimson
@@ -238,7 +337,7 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
     if (idsurveyBase64) {
       // ratio: 3.255. height: 8.5mm, width: 8.5 * 3.255 = 27.67mm.
       // center it: 105 - (27.67 / 2) = 91.17
-      doc.addImage(idsurveyBase64, 'PNG', 91.17, 10.5, 27.67, 8.5, undefined, 'FAST');
+      doc.addImage(idsurveyBase64, 'PNG', 91.17, 10.5, 27.67, 8.5, undefined, 'NONE');
     } else {
       // Draw a modern holding icon: circle enclosing checkmark
       doc.setFillColor(2, 132, 199); // Blue
@@ -270,7 +369,7 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
     if (surveyorBase64) {
       // ratio: 1.414. width: 17mm, height: 17 / 1.414 = 12.02mm.
       // x: 195 - 17 = 178
-      doc.addImage(surveyorBase64, 'PNG', 178, 8, 17, 12.02, undefined, 'FAST');
+      doc.addImage(surveyorBase64, 'PNG', 178, 8, 17, 12.02, undefined, 'NONE');
     } else {
       const xRight = 171;
       // Draw globe icon with latitude/longitude lines
@@ -439,7 +538,7 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
   y += 3;
   const section3Data = [
     { label: 'Koordinat Universal Transverse Mercator', value: '49 S (Zone UTM)' },
-    { label: 'RT/RW - Desa/Kelurahan', value: `${record.ALAMAT_KTP_BARIS_1 || 'RT/RW -'} · Desa ${record.DESA}` },
+    { label: 'Desa / Kelurahan', value: record.DESA ? (record.DESA.toUpperCase().startsWith('DESA') || record.DESA.toUpperCase().startsWith('KELURAHAN') ? record.DESA : `Desa ${record.DESA}`) : '-' },
     { label: 'Kecamatan', value: record.KECAMATAN },
     { label: 'Kabupaten/Kota', value: record.KABUPATEN },
     { label: 'Jenis Bukti Kepenguasaan / Kepemilikan', value: `${record.JENIS_ALAS_HAK} ${record.NOMER_HAK ? '(No: ' + record.NOMER_HAK + ')' : ''}` },
@@ -749,21 +848,41 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
   doc.text('Pemilik Lahan / Ahli Waris', sigCol2 + colWidth / 2, y2 + 3.5, { align: 'center' });
   doc.text('Saksi Batas / Keluarga', sigCol3 + colWidth / 2, y2 + 3.5, { align: 'center' });
 
-  // Get name strings and wrap them to prevent any overlapping
+  // Get name strings and wrap them to prevent any overlapping (max 20 chars per line, or wrap on space)
+  const wrapName20 = (text: string, maxLen = 20): string[] => {
+    if (!text || !text.trim()) return ['-'];
+    const words = text.trim().split(/\s+/);
+    const resultLines: string[] = [];
+    let current = '';
+
+    for (const w of words) {
+      if (!current) {
+        current = w;
+      } else if ((current + ' ' + w).length <= maxLen) {
+        current += ' ' + w;
+      } else {
+        resultLines.push(current);
+        current = w;
+      }
+    }
+    if (current) resultLines.push(current);
+    return resultLines;
+  };
+
   const nameTim1 = record.nama_tim_1 || 'DARMAWAN DWI SANJAYA';
-  const wrappedTim1 = doc.splitTextToSize(`1. ${nameTim1}`, 38);
+  const wrappedTim1 = wrapName20(`1. ${nameTim1}`, 20);
 
   const nameOwner = record.NAMA || 'MURSIDAH';
-  const wrappedOwner = doc.splitTextToSize(nameOwner, 50);
+  const wrappedOwner = wrapName20(nameOwner, 20);
 
   const nameSaksi1 = record.NAMA_SAKSI_1 || 'RIZKI KURNIAWAN';
-  const wrappedSaksi1 = doc.splitTextToSize(`1. ${nameSaksi1}`, 38);
+  const wrappedSaksi1 = wrapName20(`1. ${nameSaksi1}`, 20);
 
   const nameTim2 = record.nama_tim_2 || 'SATRIA ARYA WIBISONO';
-  const wrappedTim2 = doc.splitTextToSize(`2. ${nameTim2}`, 38);
+  const wrappedTim2 = wrapName20(`2. ${nameTim2}`, 20);
 
   const nameSaksi2 = record.NAMA_SAKSI_2 || 'AHMAD CHORIIN';
-  const wrappedSaksi2 = doc.splitTextToSize(`2. ${nameSaksi2}`, 38);
+  const wrappedSaksi2 = wrapName20(`2. ${nameSaksi2}`, 20);
 
   const nameKades = record.NAMA_KADES || 'TARYONO';
   const wrappedKades = doc.splitTextToSize(nameKades, 50);
@@ -790,18 +909,17 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
   const textWidthTim1 = doc.getTextWidth(wrappedTim1[wrappedTim1.length - 1]);
   doc.line(sigCol1 + 2, lastLineTim1Y + 0.8, sigCol1 + 2 + Math.min(textWidthTim1, 38), lastLineTim1Y + 0.8);
 
-  // Center Owner signature block
-  const ownerX = sigCol2 + colWidth / 2;
+  // Owner Signature Block (Pihak Yang Berhak / Warga Penerima) - formatted like Tim & Saksi
   wrappedOwner.forEach((line: string, idx: number) => {
-    doc.text(line, ownerX, sigStartY + (idx * 3.5), { align: 'center' });
+    doc.text(line, sigCol2 + 2, sigStartY + (idx * 3.5));
   });
+  doc.text('(', sigCol2 + 41, sigStartY);
+  doc.line(sigCol2 + 43, sigStartY + 0.8, sigCol2 + 54, sigStartY + 0.8);
+  doc.text(')', sigCol2 + 55, sigStartY);
 
   const lastLineOwnerY = sigStartY + (wrappedOwner.length - 1) * 3.5;
   const textWidthOwner = doc.getTextWidth(wrappedOwner[wrappedOwner.length - 1]);
-  doc.line(ownerX - Math.min(textWidthOwner/2, 25), lastLineOwnerY + 0.8, ownerX + Math.min(textWidthOwner/2, 25), lastLineOwnerY + 0.8);
-
-  // Draw signature parenthesis centered directly above owner's name
-  doc.text('(                               )', ownerX, sigStartY - 7, { align: 'center' });
+  doc.line(sigCol2 + 2, lastLineOwnerY + 0.8, sigCol2 + 2 + Math.min(textWidthOwner, 38), lastLineOwnerY + 0.8);
 
   // Saksi 1 Name
   wrappedSaksi1.forEach((line: string, idx: number) => {
@@ -862,8 +980,8 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
   doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
   doc.text(`KEPALA DESA ${record.DESA?.toUpperCase() || 'DESA'}`, centerColX, kadesStartY + 7, { align: 'center' });
 
-  // Spacing for Kades actual signature area (22mm vertical height)
-  const kadesNameY = kadesStartY + 22;
+  // Spacing for Kades actual signature area (32mm vertical height for extra space)
+  const kadesNameY = kadesStartY + 32;
 
   // Kades Name
   doc.setFont('helvetica', 'bold');
@@ -931,13 +1049,40 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
       }
     }
     
+    // Query custom field mappings from Firestore geojson_layers
+    let customMapping: any = null;
+    try {
+      const querySnapshot = await getDocs(collection(db, 'geojson_layers'));
+      querySnapshot.forEach((doc) => {
+        const layerData = doc.data();
+        if (layerData.type === 'bidang' && layerData.fieldMapping) {
+          customMapping = layerData.fieldMapping;
+        }
+      });
+    } catch (e) {
+      console.warn('Gagal memuat custom mapping dari Firestore:', e);
+    }
+
     if (geojsonData && geojsonData.features) {
       matchedFeat = geojsonData.features.find((f: any) => {
         const props = f.properties;
         if (!props) return false;
-        const featDesa = props.desa || props.village || props.kelurahan || props.KECAMATAN || '';
-        const featSpan = props.span || props.section || props.jalur || props.ROW || '';
-        const featNobid = props.nobidis || props.nobiddis || props.nobid || props.no_bidang || props.no_bid || props.id || '';
+        
+        let featDesa = '';
+        let featSpan = '';
+        let featNobid = '';
+        
+        if (customMapping) {
+          if (customMapping.desa) featDesa = String(props[customMapping.desa] || '');
+          if (customMapping.span) featSpan = String(props[customMapping.span] || '');
+          if (customMapping.nobid) featNobid = String(props[customMapping.nobid] || '');
+        }
+        
+        // Fallback to defaults if custom mapping did not yield a value
+        if (!featDesa) featDesa = props.desa || props.village || props.kelurahan || props.KECAMATAN || '';
+        if (!featSpan) featSpan = props.span || props.section || props.jalur || props.ROW || '';
+        if (!featNobid) featNobid = props.nobidis || props.nobiddis || props.nobid || props.no_bidang || props.no_bid || props.id || '';
+        
         return isRecordMatched(
           String(featNobid), String(featDesa), String(featSpan),
           record.NOBID, record.DESA, record.SPAN
@@ -952,9 +1097,13 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
           polygonPoints = geom.coordinates[0][0];
         }
         
-        // Find rotation if specified in properties (support various cases)
+        // Find rotation if specified in properties (support custom mapping or default cases)
         const props = matchedFeat.properties || {};
-        rotationDeg = Number(props.rotasi || props.rotation || props.ROTASI || props.ROTATION || 0);
+        if (customMapping && customMapping.rotasi && props[customMapping.rotasi] !== undefined) {
+          rotationDeg = Number(props[customMapping.rotasi] || 0);
+        } else {
+          rotationDeg = Number(props.rotasi || props.rotation || props.ROTASI || props.ROTATION || 0);
+        }
       }
     }
   } catch (e) {
@@ -1072,7 +1221,7 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
 
       // 6. Draw 4 white masking rectangles outside the box container to clean any bleed
       doc.setFillColor(255, 255, 255);
-      // Top mask
+      // Top mask (from Y=0 down to boxY=40mm)
       doc.rect(0, 0, 210, boxY, 'F');
       // Bottom mask
       doc.rect(0, boxY + boxH, 210, 297 - (boxY + boxH), 'F');
@@ -1080,6 +1229,17 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
       doc.rect(0, boxY, boxX, boxH, 'F');
       // Right mask
       doc.rect(boxX + boxW, boxY, 210 - (boxX + boxW), boxH, 'F');
+
+      // Redraw Header & Title over the top mask so logos and header line are 100% pristine and unaffected
+      drawPageHeader(currentPNum);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
+      doc.text('SITUASI DAN DENAH BIDANG TANAH UNTUK KOMPENSASI', 105, 30, { align: 'center' });
+      
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text(`NOMER BIDANG : ${record.NOBID || '-'}`, 105, 34, { align: 'center' });
 
       // 7. Redraw the container border
       doc.setDrawColor(darkSlate[0], darkSlate[1], darkSlate[2]);
@@ -1166,29 +1326,42 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
   doc.setTextColor(51, 65, 85);
 
   let coordY = 120;
+  let lastCoordY = coordY;
+
   if (polygonPoints && polygonPoints.length > 0) {
     const uniquePoints = polygonPoints.slice(0, polygonPoints.length - 1);
-    uniquePoints.forEach((pt, i) => {
-      if (i < 16) { // Draw up to 16 vertices in a 2x8 column grid
-        const utm = latLngToUTM49S(pt[0], pt[1]);
-        const colIdx = i % 2;
-        const rowIdx = Math.floor(i / 2);
-        const px = leftMargin + 6 + (colIdx * 90);
-        const py = coordY + (rowIdx * 5);
+    const totalPts = uniquePoints.length; // Show all points!
+    const numCols = totalPts > 22 ? 3 : 2;
+    const numRows = Math.ceil(totalPts / numCols);
+    const rowHeight = totalPts > 18 ? 4.5 : 5.0;
+    const colWidth = numCols === 3 ? 59 : 90;
 
-        doc.setFont('helvetica', 'bold');
-        doc.text(`Koordinat P${i+1}`, px, py);
-        doc.setFont('helvetica', 'normal');
+    uniquePoints.forEach((pt, i) => {
+      const utm = latLngToUTM49S(pt[0], pt[1]);
+      const colIdx = Math.floor(i / numRows);
+      const rowIdx = i % numRows;
+      const px = leftMargin + (numCols === 3 ? 2 : 4) + (colIdx * colWidth);
+      const py = coordY + (rowIdx * rowHeight);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text(`Koordinat P${i+1}`, px, py);
+      doc.setFont('helvetica', 'normal');
+      if (numCols === 3) {
+        doc.text(`X: ${utm.x.toFixed(2)} Y: ${utm.y.toFixed(2)}`, px + 18, py);
+      } else {
         doc.text(`X: ${utm.x.toFixed(4)}   Y: ${utm.y.toFixed(4)}`, px + 22, py);
       }
     });
+
+    lastCoordY = coordY + ((numRows - 1) * rowHeight) + 4;
   } else {
     doc.setFont('helvetica', 'italic');
     doc.text('Data koordinat bidang tanah tidak tersedia.', leftMargin + 6, coordY);
+    lastCoordY = coordY + 6;
   }
 
-  // BOUNDARIES TABLE
-  const batasYStart = 168;
+  // BOUNDARIES TABLE - Dynamically placed below Section I
+  const batasYStart = Math.max(162, lastCoordY + 6);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(darkSlate[0], darkSlate[1], darkSlate[2]);
@@ -1245,6 +1418,17 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
   });
 
 
+  // Preload photo images asynchronously
+  const photoUrls = [
+    record.LINK_DOKUMENTASI_BIDANG || '',
+    record.LINK_DOKUMENTASI_BIDANG_2 || '',
+    record.LINK_DOKUMENTASI_BIDANG_3 || record.LINK_WAJAH_PEMILIK || ''
+  ];
+
+  const photoBase64s = await Promise.all(
+    photoUrls.map(url => url ? loadImageAsBase64(url, 700, false) : Promise.resolve(''))
+  );
+
   // ==========================================
   // PAGE 4: Dokumentasi Situasi Bidang Tanah
   // ==========================================
@@ -1275,13 +1459,14 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
   const picStartX = 15 + 10; // offset of 10mm inside the 180mm container
 
   const photoLabels = [
-    'Foto Kondisi Bidang Lahan',
-    'Foto Patok / Batas Utama',
-    'Foto Wajah Pemilik / KTP'
+    'Foto Kondisi Bidang Lahan 1',
+    'Foto Kondisi Bidang Lahan 2',
+    'Foto Kondisi Bidang Lahan 3'
   ];
 
   for (let i = 0; i < 3; i++) {
     const px = picStartX + i * (picW + picGap);
+    const photoData = photoBase64s[i];
     
     // Draw photo outer border
     doc.setDrawColor(148, 163, 184); // slate-400
@@ -1289,20 +1474,41 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
     doc.setFillColor(248, 250, 252); // slate-50
     doc.rect(px, picY, picW, picH, 'FD');
 
-    // Inner photo area
-    doc.setFillColor(241, 245, 249); // slate-100
-    doc.rect(px + 2, picY + 2, picW - 4, picH - 4, 'F');
+    if (photoData && photoData.startsWith('data:image/')) {
+      try {
+        // Embed the actual uploaded image inside the box!
+        doc.addImage(photoData, 'JPEG', px + 0.8, picY + 0.8, picW - 1.6, picH - 1.6, undefined, 'FAST');
+      } catch (err) {
+        console.warn(`Failed to add image ${i+1} to PDF:`, err);
+        // Fallback placeholder
+        doc.setFillColor(241, 245, 249);
+        doc.rect(px + 2, picY + 2, picW - 4, picH - 4, 'F');
 
-    // camera icon in center
-    const cx = px + picW / 2;
-    const cy = picY + picH / 2;
-    doc.setDrawColor(148, 163, 184);
-    doc.setLineWidth(0.4);
-    doc.circle(cx, cy, 3.5, 'S');
-    doc.rect(cx - 5.5, cy - 3, 11, 6, 'S');
-    doc.rect(cx - 2, cy - 4.5, 4, 1.5, 'S');
+        const cx = px + picW / 2;
+        const cy = picY + picH / 2;
+        doc.setDrawColor(148, 163, 184);
+        doc.setLineWidth(0.4);
+        doc.circle(cx, cy, 3.5, 'S');
+        doc.rect(cx - 5.5, cy - 3, 11, 6, 'S');
+        doc.rect(cx - 2, cy - 4.5, 4, 1.5, 'S');
+      }
+    } else {
+      // Inner photo area placeholder
+      doc.setFillColor(241, 245, 249); // slate-100
+      doc.rect(px + 2, picY + 2, picW - 4, picH - 4, 'F');
+
+      // camera icon in center
+      const cx = px + picW / 2;
+      const cy = picY + picH / 2;
+      doc.setDrawColor(148, 163, 184);
+      doc.setLineWidth(0.4);
+      doc.circle(cx, cy, 3.5, 'S');
+      doc.rect(cx - 5.5, cy - 3, 11, 6, 'S');
+      doc.rect(cx - 2, cy - 4.5, 4, 1.5, 'S');
+    }
 
     // label
+    const cx = px + picW / 2;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.5);
     doc.setTextColor(71, 85, 105);
