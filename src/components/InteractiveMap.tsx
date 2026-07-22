@@ -28,6 +28,7 @@ interface LoadedGeoJSON {
     nama?: string;
     tower?: string;
     jalurName?: string;
+    rotasi?: string;
   };
   isDefault?: boolean;
 }
@@ -87,12 +88,60 @@ const getSpanOfBidang = (properties: any, layer: LoadedGeoJSON) => {
 };
 
 const getNobidOfBidang = (properties: any, layer: LoadedGeoJSON) => {
-  if (layer.fieldMapping?.nobid) {
+  if (layer.fieldMapping?.nobid && properties[layer.fieldMapping.nobid] !== undefined) {
     return String(properties[layer.fieldMapping.nobid] || '').trim();
   }
   return findPropertyCaseInsensitive(properties, [
-    'nobidis', 'nobiddis', 'nobid', 'no_bidang', 'no_bid', 'nomor', 'nomer', 'id', 'fid', 'objectid'
+    'nobid', 'nobiddc', 'nobiddis', 'nobidis', 'no_bidang', 'no_bid', 'nomor', 'nomer', 'id', 'fid', 'objectid', 'nib'
   ]);
+};
+
+const getRotasiOfBidang = (properties: any, layer?: LoadedGeoJSON): number => {
+  if (layer?.fieldMapping?.rotasi && properties[layer.fieldMapping.rotasi] !== undefined) {
+    const val = Number(properties[layer.fieldMapping.rotasi]);
+    if (!isNaN(val)) return val;
+  }
+  const foundKey = findPropertyCaseInsensitive(properties, [
+    'rotate', 'rotasi', 'rotation', 'rotdetec', 'sudut', 'angle'
+  ]);
+  if (foundKey && properties[foundKey] !== undefined) {
+    const val = Number(properties[foundKey]);
+    if (!isNaN(val)) return val;
+  }
+  return 0;
+};
+
+const rotatePolygonCoords = (coords: [number, number][], rotationDeg: number): [number, number][] => {
+  if (!rotationDeg || rotationDeg === 0) return coords;
+
+  const count = coords.length > 1 && coords[0][0] === coords[coords.length - 1][0] && coords[0][1] === coords[coords.length - 1][1]
+    ? coords.length - 1
+    : coords.length;
+  if (count <= 0) return coords;
+
+  let sumLng = 0, sumLat = 0;
+  for (let i = 0; i < count; i++) {
+    sumLng += coords[i][0];
+    sumLat += coords[i][1];
+  }
+  const centerLng = sumLng / count;
+  const centerLat = sumLat / count;
+  const latScaleFactor = Math.cos(centerLat * Math.PI / 180);
+
+  const angleRad = -rotationDeg * Math.PI / 180;
+  const cosA = Math.cos(angleRad);
+  const sinA = Math.sin(angleRad);
+
+  return coords.map(([lng, lat]) => {
+    const dx = (lng - centerLng) * latScaleFactor;
+    const dy = lat - centerLat;
+    const rotX = dx * cosA - dy * sinA;
+    const rotY = dx * sinA + dy * cosA;
+
+    const newLng = centerLng + (rotX / latScaleFactor);
+    const newLat = centerLat + rotY;
+    return [newLng, newLat];
+  });
 };
 
 const getNamaOfBidang = (properties: any, layer: LoadedGeoJSON) => {
@@ -154,7 +203,7 @@ const isRecordMatched = (
 
   const nFeatDesa = normalizeString(featDesa);
   const nRecordDesa = normalizeString(recordDesa);
-  if (nFeatDesa && nRecordDesa) {
+  if (nFeatDesa && nRecordDesa && nFeatDesa.length >= 3 && nRecordDesa.length >= 3) {
     if (!nFeatDesa.includes(nRecordDesa) && !nRecordDesa.includes(nFeatDesa)) {
       return false;
     }
@@ -162,7 +211,7 @@ const isRecordMatched = (
 
   const nFeatSpan = normalizeSpan(featSpan);
   const nRecordSpan = normalizeSpan(recordSpan);
-  if (nFeatSpan && nRecordSpan) {
+  if (nFeatSpan && nRecordSpan && nFeatSpan.length >= 2 && nRecordSpan.length >= 2) {
     if (!nFeatSpan.includes(nRecordSpan) && !nRecordSpan.includes(nFeatSpan)) {
       return false;
     }
@@ -284,13 +333,32 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
         });
       });
 
+      // Merge local fallback layers from localStorage
+      const mergedMap = new Map<string, LoadedGeoJSON>();
+      try {
+        const localLayers: LoadedGeoJSON[] = JSON.parse(localStorage.getItem('local_geojson_layers') || '[]');
+        localLayers.forEach(l => mergedMap.set(l.id, l));
+      } catch (e) {}
+      customLayers.forEach(c => {
+        const existing = mergedMap.get(c.id);
+        mergedMap.set(c.id, {
+          ...existing,
+          ...c,
+          name: c.name || existing?.name || '',
+          data: c.data || existing?.data,
+          type: c.type || existing?.type || 'bidang',
+          fieldMapping: c.fieldMapping || existing?.fieldMapping || null
+        });
+      });
+      const combinedCustomLayers = Array.from(mergedMap.values());
+
       setLoadedGeoJSONs(prev => {
         const defaults = prev.filter(p => p.isDefault);
-        const customIds = customLayers.map(c => c.id);
+        const activeCustomIds = combinedCustomLayers.map(c => c.id);
 
         // Remove any deleted layers from Leaflet map
         prev.forEach(g => {
-          if (!g.isDefault && !customIds.includes(g.id)) {
+          if (!g.isDefault && !activeCustomIds.includes(g.id)) {
             if (mapRef.current && geojsonLayersRef.current[g.id]) {
               mapRef.current.removeLayer(geojsonLayersRef.current[g.id]);
               delete geojsonLayersRef.current[g.id];
@@ -298,7 +366,7 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
           }
         });
 
-        return [...defaults, ...customLayers];
+        return [...defaults, ...combinedCustomLayers];
       });
     }, (err) => {
       console.warn('Error listening to geojson_layers collection:', err);
@@ -578,7 +646,25 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
 
     // 2. Add or update layers from loadedGeoJSONs
     loadedGeoJSONs.forEach(layer => {
+      if (!layer.data) return;
+
+      const mappingKey = JSON.stringify(layer.fieldMapping || {});
       let leafLayer = geojsonLayersRef.current[layer.id];
+
+      // Re-create layer if fieldMapping changed
+      if (leafLayer && (leafLayer as any)._mappingKey !== mappingKey) {
+        try {
+          leafLayer.eachLayer((l: any) => {
+            l.closeTooltip?.();
+            l.closePopup?.();
+          });
+          if (map.hasLayer(leafLayer)) {
+            map.removeLayer(leafLayer);
+          }
+        } catch (e) {}
+        delete geojsonLayersRef.current[layer.id];
+        leafLayer = undefined;
+      }
 
       if (!leafLayer) {
         leafLayer = L.geoJSON(layer.data, {
@@ -633,6 +719,7 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
               const owner = getNamaOfBidang(properties, layer) || 'N/A';
               const desa = getDesaOfBidang(properties, layer) || 'N/A';
               const span = getSpanOfBidang(properties, layer) || 'N/A';
+              const rot = getRotasiOfBidang(properties, layer);
 
               tooltipText = `
                 <div class="p-1 text-slate-100 font-sans">
@@ -640,6 +727,7 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
                   <p class="text-[10px]"><span class="text-slate-400">Pemilik:</span> ${owner}</p>
                   <p class="text-[10px]"><span class="text-slate-400">Desa:</span> ${desa}</p>
                   <p class="text-[10px]"><span class="text-slate-400">Span:</span> ${span}</p>
+                  ${rot !== 0 ? `<p class="text-[10px]"><span class="text-amber-300 font-semibold">Rotasi:</span> ${rot}°</p>` : ''}
                 </div>
               `;
               fLayer.bindTooltip(tooltipText, { className: 'custom-map-tooltip-dark' });
@@ -679,6 +767,7 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
           }
         });
 
+        (leafLayer as any)._mappingKey = mappingKey;
         geojsonLayersRef.current[layer.id] = leafLayer;
       }
 

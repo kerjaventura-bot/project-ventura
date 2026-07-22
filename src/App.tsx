@@ -14,7 +14,7 @@ import QCPanel from './components/QCPanel';
 import ActivityLogsPanel from './components/ActivityLogsPanel';
 import InteractiveMap from './components/InteractiveMap';
 import { 
-  Map, Database, UploadCloud, ShieldAlert, LogOut, 
+  Map as MapIcon, Database, UploadCloud, ShieldAlert, LogOut, 
   RefreshCw, FileSpreadsheet, KeyRound, CheckSquare,
   Plus, User, UserCheck, Settings, Folder, Key, Eye, EyeOff, Lock, Unlock, Info, ShieldCheck, HelpCircle, Briefcase,
   Pin, Menu, Clock, LayoutGrid, Sun, Moon, Copy, Users, ExternalLink, Layers, Trash2, X, Globe
@@ -491,10 +491,10 @@ export default function App() {
   // Real-time synchronization of custom GeoJSON layers from Firestore
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'geojson_layers'), (snapshot) => {
-      const layers: any[] = [];
+      const customLayers: any[] = [];
       snapshot.forEach((docSnap) => {
         const item = docSnap.data();
-        layers.push({
+        customLayers.push({
           id: docSnap.id,
           name: item.name || '',
           type: item.type || 'bidang',
@@ -504,7 +504,30 @@ export default function App() {
           fieldMapping: item.fieldMapping || null
         });
       });
-      setLoadedGeoJSONs(layers);
+      // Combine and remove duplicates by ID
+      const mergedMap = new Map<string, any>();
+      
+      // Merge local fallback layers first
+      let localLayers: any[] = [];
+      try {
+        localLayers = JSON.parse(localStorage.getItem('local_geojson_layers') || '[]');
+      } catch (e) {}
+      localLayers.forEach(l => mergedMap.set(l.id, l));
+
+      // Override/merge with cloud Firestore layers safely
+      customLayers.forEach(c => {
+        const existing = mergedMap.get(c.id);
+        mergedMap.set(c.id, {
+          ...existing,
+          ...c,
+          name: c.name || existing?.name || '',
+          data: c.data || existing?.data,
+          type: c.type || existing?.type || 'bidang',
+          fieldMapping: c.fieldMapping || existing?.fieldMapping || null
+        });
+      });
+
+      setLoadedGeoJSONs(Array.from(mergedMap.values()));
     }, (err) => {
       console.warn('Error listening to geojson_layers collection in App:', err);
     });
@@ -512,8 +535,32 @@ export default function App() {
   }, []);
 
   const handleAddGeoJSON = async (data: any, name: string, type: 'bidang' | 'jalur' | 'tower') => {
+    const newId = `${type}_${Date.now()}`;
+    const newLayer: any = {
+      id: newId,
+      name,
+      type,
+      data,
+      visible: true,
+      isDefault: false,
+      fieldMapping: null
+    };
+
+    // Update local state immediately for instant feedback
+    setLoadedGeoJSONs(prev => {
+      if (prev.some(p => p.id === newId)) return prev;
+      return [...prev, newLayer];
+    });
+
+    // Always update localStorage so client reliably retains layer data
     try {
-      const newId = `${type}_${Date.now()}`;
+      const localGeoJSONs = JSON.parse(localStorage.getItem('local_geojson_layers') || '[]');
+      const filtered = localGeoJSONs.filter((l: any) => l.id !== newId);
+      filtered.push(newLayer);
+      localStorage.setItem('local_geojson_layers', JSON.stringify(filtered));
+    } catch (e) {}
+
+    try {
       await setDoc(doc(db, 'geojson_layers', newId), {
         name,
         type,
@@ -522,8 +569,11 @@ export default function App() {
         isDefault: false,
         fieldMapping: null
       });
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Gagal menyimpan GeoJSON ke Firestore:', err);
+      if (err?.message?.includes('exceeds') || err?.code === 'invalid-argument') {
+        alert(`Berkas GeoJSON "${name}" berhasil diunggah di browser lokal. Karena ukurannya melebihi batas 1MB Firestore Cloud, berkas disimpan secara lokal dan tetap ditampilkan di Peta Spasial.`);
+      }
     }
   };
 
@@ -535,13 +585,25 @@ export default function App() {
     } catch (err) {
       console.warn('Gagal mengubah visibilitas:', err);
     }
+    setLoadedGeoJSONs(prev => prev.map(g => g.id === id ? { ...g, visible: !visible } : g));
   };
 
   const handleRemoveGeoJSON = async (id: string) => {
+    // 1. Immediately remove from localStorage first
+    try {
+      const localGeoJSONs = JSON.parse(localStorage.getItem('local_geojson_layers') || '[]');
+      const filtered = localGeoJSONs.filter((l: any) => l.id !== id);
+      localStorage.setItem('local_geojson_layers', JSON.stringify(filtered));
+    } catch (e) {}
+
+    // 2. Immediately remove from React state for instant UI update
+    setLoadedGeoJSONs(prev => prev.filter(g => g.id !== id));
+
+    // 3. Delete from Firestore in background
     try {
       await deleteDoc(doc(db, 'geojson_layers', id));
     } catch (err) {
-      console.warn('Gagal menghapus GeoJSON:', err);
+      console.warn('Gagal menghapus GeoJSON dari Firestore:', err);
     }
   };
 
@@ -1988,7 +2050,7 @@ export default function App() {
                   : 'text-slate-400 hover:bg-white/5 hover:text-white border border-transparent'
               }`}
             >
-              <Map className="w-4 h-4 shrink-0" />
+              <MapIcon className="w-4 h-4 shrink-0" />
               1.2. Peta Spasial (GIS)
             </button>
 
@@ -3002,40 +3064,49 @@ export default function App() {
                           {/* Upload Cards Grid */}
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-5 pt-2">
                             {/* Card upload Bidang */}
-                            <div className="p-4 bg-slate-900/45 rounded-xl border border-white/5 flex flex-col justify-between space-y-3">
+                            <div className="p-4 bg-emerald-950/20 rounded-xl border border-emerald-500/30 flex flex-col justify-between space-y-3">
                               <div>
-                                <h4 className="text-xs font-bold text-emerald-300">1. GeoJSON Bidang Tanah</h4>
-                                <p className="text-[11px] text-slate-400 mt-0.5">Poligon bidang per-desa/per-jalur untuk memetakan kepemilikan lahan.</p>
+                                <h4 className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                                  1. GeoJSON Bidang Tanah
+                                </h4>
+                                <p className="text-[11px] text-slate-400 mt-1">Poligon bidang per-desa/per-jalur untuk memetakan kepemilikan lahan.</p>
                               </div>
-                              <label className="px-3 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-white rounded-lg text-xs font-semibold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md">
-                                <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
-                                Unggah Bidang
+                              <label className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 border border-emerald-400/30 text-white rounded-lg text-xs font-bold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md hover:scale-[1.02]">
+                                <UploadCloud className="w-4 h-4 text-white" />
+                                Unggah Bidang Tanah
                                 <input type="file" accept=".geojson,application/json" onChange={(e) => handleGeoJSONUpload(e, 'bidang')} className="hidden" />
                               </label>
                             </div>
 
                             {/* Card upload Jalur */}
-                            <div className="p-4 bg-slate-900/45 rounded-xl border border-white/5 flex flex-col justify-between space-y-3">
+                            <div className="p-4 bg-amber-950/20 rounded-xl border border-amber-500/30 flex flex-col justify-between space-y-3">
                               <div>
-                                <h4 className="text-xs font-bold text-orange-300">2. GeoJSON Jalur Corridor</h4>
-                                <p className="text-[11px] text-slate-400 mt-0.5">Garis koridor/buffer bebas hambatan ROW transmisi 150 kV.</p>
+                                <h4 className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                                  <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                                  2. GeoJSON Jalur Corridor
+                                </h4>
+                                <p className="text-[11px] text-slate-400 mt-1">Garis koridor/buffer bebas hambatan ROW transmisi 150 kV.</p>
                               </div>
-                              <label className="px-3 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-white rounded-lg text-xs font-semibold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md">
-                                <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
-                                Unggah Jalur
+                              <label className="px-3 py-2 bg-amber-600 hover:bg-amber-500 border border-amber-400/30 text-white rounded-lg text-xs font-bold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md hover:scale-[1.02]">
+                                <UploadCloud className="w-4 h-4 text-white" />
+                                Unggah Jalur Corridor
                                 <input type="file" accept=".geojson,application/json" onChange={(e) => handleGeoJSONUpload(e, 'jalur')} className="hidden" />
                               </label>
                             </div>
 
                             {/* Card upload Tower */}
-                            <div className="p-4 bg-slate-900/45 rounded-xl border border-white/5 flex flex-col justify-between space-y-3">
+                            <div className="p-4 bg-indigo-950/20 rounded-xl border border-indigo-500/30 flex flex-col justify-between space-y-3">
                               <div>
-                                <h4 className="text-xs font-bold text-indigo-300">3. GeoJSON Tapak Tower</h4>
-                                <p className="text-[11px] text-slate-400 mt-0.5">Titik posisi koordinat tower penyangga lengkap dengan nomor tower.</p>
+                                <h4 className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+                                  <span className="w-2 h-2 rounded-full bg-indigo-400"></span>
+                                  3. GeoJSON Tapak Tower
+                                </h4>
+                                <p className="text-[11px] text-slate-400 mt-1">Titik posisi koordinat tower penyangga lengkap dengan nomor tower.</p>
                               </div>
-                              <label className="px-3 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-white rounded-lg text-xs font-semibold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md">
-                                <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
-                                Unggah Tower
+                              <label className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 border border-indigo-400/30 text-white rounded-lg text-xs font-bold text-center cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md hover:scale-[1.02]">
+                                <UploadCloud className="w-4 h-4 text-white" />
+                                Unggah Tapak Tower
                                 <input type="file" accept=".geojson,application/json" onChange={(e) => handleGeoJSONUpload(e, 'tower')} className="hidden" />
                               </label>
                             </div>
@@ -3091,8 +3162,12 @@ export default function App() {
                                       {g.visible ? 'Sembunyikan' : 'Tampilkan'}
                                     </button>
                                     <button
-                                      onClick={() => handleRemoveGeoJSON(g.id)}
-                                      className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors border border-white/5"
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRemoveGeoJSON(g.id);
+                                      }}
+                                      className="p-2 text-rose-400/80 hover:text-rose-400 hover:bg-rose-500/20 active:scale-90 rounded-lg transition-all border border-rose-500/20 cursor-pointer shadow-sm"
                                       title="Hapus Lapisan"
                                     >
                                       <Trash2 className="w-4 h-4" />
@@ -3298,16 +3373,32 @@ export default function App() {
                                 <button
                                   type="button"
                                   onClick={async () => {
+                                    if (!configuringLayer) return;
+                                    const updatedMapping = { ...tempMapping };
+                                    
+                                    // 1. Update React state immediately for instant response
+                                    setLoadedGeoJSONs(prev => prev.map(g => g.id === configuringLayer.id ? { ...g, fieldMapping: updatedMapping } : g));
+
+                                    // 2. Update localStorage fallback
+                                    try {
+                                      const localGeoJSONs = JSON.parse(localStorage.getItem('local_geojson_layers') || '[]');
+                                      const updatedLocal = localGeoJSONs.map((l: any) => l.id === configuringLayer.id ? { ...l, fieldMapping: updatedMapping } : l);
+                                      localStorage.setItem('local_geojson_layers', JSON.stringify(updatedLocal));
+                                    } catch (e) {}
+
+                                    // 3. Close modal immediately
+                                    setConfiguringLayer(null);
+
+                                    // 4. Async sync to Firestore
                                     try {
                                       await setDoc(doc(db, 'geojson_layers', configuringLayer.id), {
-                                        fieldMapping: tempMapping
+                                        fieldMapping: updatedMapping
                                       }, { merge: true });
-                                      setConfiguringLayer(null);
                                     } catch (err) {
-                                      console.warn('Gagal menyimpan pemetaan kolom GeoJSON:', err);
+                                      console.warn('Gagal menyimpan pemetaan kolom GeoJSON ke Firestore:', err);
                                     }
                                   }}
-                                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-550 text-white rounded-xl text-xs font-bold shadow-md cursor-pointer transition-all"
+                                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-md cursor-pointer transition-all hover:scale-105 active:scale-95"
                                 >
                                   Simpan Pemetaan
                                 </button>

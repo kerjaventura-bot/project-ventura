@@ -3,6 +3,18 @@ import { type LandRecord } from '../types';
 import { db } from './firebase';
 import { collection, getDocs } from 'firebase/firestore';
 
+const findPropInObj = (obj: any, keys: string[]): string => {
+  if (!obj) return '';
+  const objKeys = Object.keys(obj);
+  for (const k of keys) {
+    const found = objKeys.find(ok => ok.toLowerCase() === k.toLowerCase());
+    if (found && obj[found] !== undefined && obj[found] !== null) {
+      return String(obj[found]).trim();
+    }
+  }
+  return '';
+};
+
 const normalizeString = (val: string): string => {
   return String(val || '').trim().toLowerCase();
 };
@@ -35,7 +47,7 @@ const isRecordMatched = (
 
   const nFeatDesa = normalizeString(featDesa);
   const nRecordDesa = normalizeString(recordDesa);
-  if (nFeatDesa && nRecordDesa) {
+  if (nFeatDesa && nRecordDesa && nFeatDesa.length >= 3 && nRecordDesa.length >= 3) {
     if (!nFeatDesa.includes(nRecordDesa) && !nRecordDesa.includes(nFeatDesa)) {
       return false;
     }
@@ -43,7 +55,7 @@ const isRecordMatched = (
 
   const nFeatSpan = normalizeSpan(featSpan);
   const nRecordSpan = normalizeSpan(recordSpan);
-  if (nFeatSpan && nRecordSpan) {
+  if (nFeatSpan && nRecordSpan && nFeatSpan.length >= 2 && nRecordSpan.length >= 2) {
     if (!nFeatSpan.includes(nRecordSpan) && !nRecordSpan.includes(nFeatSpan)) {
       return false;
     }
@@ -1019,8 +1031,38 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
   let geojsonData: any = null;
   let matchedFeat: any = null;
   let rotationDeg = 0;
+  let customMapping: any = null;
 
   try {
+    const candidateGeoJSONs: { data: any; fieldMapping?: any }[] = [];
+
+    // 1. Gather custom layers from localStorage
+    try {
+      const localLayers = JSON.parse(localStorage.getItem('local_geojson_layers') || '[]');
+      localLayers.forEach((l: any) => {
+        if (l.data && l.data.features && (l.type === 'bidang' || !l.type)) {
+          candidateGeoJSONs.push({ data: l.data, fieldMapping: l.fieldMapping });
+        }
+      });
+    } catch (e) {}
+
+    // 2. Gather custom layers and field mapping from Firestore
+    try {
+      const querySnapshot = await getDocs(collection(db, 'geojson_layers'));
+      querySnapshot.forEach((docSnap) => {
+        const l = docSnap.data();
+        if (l.fieldMapping && !customMapping) {
+          customMapping = l.fieldMapping;
+        }
+        if (l.data && l.data.features && (l.type === 'bidang' || !l.type)) {
+          candidateGeoJSONs.push({ data: l.data, fieldMapping: l.fieldMapping });
+        }
+      });
+    } catch (e) {
+      console.warn('Gagal memuat custom mapping dari Firestore:', e);
+    }
+
+    // 3. Static fallback files
     const projName = projectName || '';
     const normalizedProj = projName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     
@@ -1041,69 +1083,75 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
       try {
         const response = await fetch(path);
         if (response.ok) {
-          geojsonData = await response.json();
-          break;
+          const fetchedJson = await response.json();
+          if (fetchedJson && fetchedJson.features) {
+            candidateGeoJSONs.push({ data: fetchedJson, fieldMapping: customMapping });
+          }
         }
       } catch (err) {
         // try next
       }
     }
-    
-    // Query custom field mappings from Firestore geojson_layers
-    let customMapping: any = null;
-    try {
-      const querySnapshot = await getDocs(collection(db, 'geojson_layers'));
-      querySnapshot.forEach((doc) => {
-        const layerData = doc.data();
-        if (layerData.type === 'bidang' && layerData.fieldMapping) {
-          customMapping = layerData.fieldMapping;
-        }
-      });
-    } catch (e) {
-      console.warn('Gagal memuat custom mapping dari Firestore:', e);
-    }
 
-    if (geojsonData && geojsonData.features) {
-      matchedFeat = geojsonData.features.find((f: any) => {
+    // Search across all candidate GeoJSON datasets for matched parcel!
+    for (const candidate of candidateGeoJSONs) {
+      const gData = candidate.data;
+      if (!gData || !Array.isArray(gData.features)) continue;
+      const cMapping = candidate.fieldMapping || customMapping;
+
+      const found = gData.features.find((f: any) => {
         const props = f.properties;
         if (!props) return false;
-        
+
         let featDesa = '';
         let featSpan = '';
         let featNobid = '';
-        
-        if (customMapping) {
-          if (customMapping.desa) featDesa = String(props[customMapping.desa] || '');
-          if (customMapping.span) featSpan = String(props[customMapping.span] || '');
-          if (customMapping.nobid) featNobid = String(props[customMapping.nobid] || '');
+
+        if (cMapping) {
+          if (cMapping.desa && props[cMapping.desa] !== undefined) featDesa = String(props[cMapping.desa] || '');
+          if (cMapping.span && props[cMapping.span] !== undefined) featSpan = String(props[cMapping.span] || '');
+          if (cMapping.nobid && props[cMapping.nobid] !== undefined) featNobid = String(props[cMapping.nobid] || '');
         }
-        
-        // Fallback to defaults if custom mapping did not yield a value
-        if (!featDesa) featDesa = props.desa || props.village || props.kelurahan || props.KECAMATAN || '';
-        if (!featSpan) featSpan = props.span || props.section || props.jalur || props.ROW || '';
-        if (!featNobid) featNobid = props.nobidis || props.nobiddis || props.nobid || props.no_bidang || props.no_bid || props.id || '';
-        
+
+        if (!featDesa) {
+          featDesa = findPropInObj(props, ['desa', 'village', 'kelurahan', 'distrik', 'kecamatan', 'kabupaten']);
+        }
+        if (!featSpan) {
+          featSpan = findPropInObj(props, ['span', 'section', 'jalur', 'row', 'koridor', 'corridor']);
+        }
+        if (!featNobid) {
+          featNobid = findPropInObj(props, ['nobid', 'nobiddc', 'nobiddis', 'nobidis', 'no_bidang', 'no_bid', 'nomor', 'nomer', 'id', 'fid', 'objectid', 'nib']);
+        }
+
         return isRecordMatched(
           String(featNobid), String(featDesa), String(featSpan),
           record.NOBID, record.DESA, record.SPAN
         );
       });
-      
-      if (matchedFeat) {
+
+      if (found) {
+        matchedFeat = found;
+        geojsonData = gData;
+
         const geom = matchedFeat.geometry;
-        if (geom.type === 'Polygon') {
-          polygonPoints = geom.coordinates[0];
-        } else if (geom.type === 'MultiPolygon') {
-          polygonPoints = geom.coordinates[0][0];
+        if (geom) {
+          if (geom.type === 'Polygon' && geom.coordinates?.[0]) {
+            polygonPoints = geom.coordinates[0];
+          } else if (geom.type === 'MultiPolygon' && geom.coordinates?.[0]?.[0]) {
+            polygonPoints = geom.coordinates[0][0];
+          }
         }
-        
-        // Find rotation if specified in properties (support custom mapping or default cases)
+
         const props = matchedFeat.properties || {};
-        if (customMapping && customMapping.rotasi && props[customMapping.rotasi] !== undefined) {
-          rotationDeg = Number(props[customMapping.rotasi] || 0);
+        if (cMapping && cMapping.rotasi && props[cMapping.rotasi] !== undefined) {
+          rotationDeg = Number(props[cMapping.rotasi] || 0);
         } else {
-          rotationDeg = Number(props.rotasi || props.rotation || props.ROTASI || props.ROTATION || 0);
+          const rotVal = findPropInObj(props, ['rotate', 'rotasi', 'rotation', 'rotdetec', 'sudut', 'angle']);
+          rotationDeg = Number(rotVal || 0);
         }
+
+        if (isNaN(rotationDeg)) rotationDeg = 0;
+        break;
       }
     }
   } catch (e) {
@@ -1134,12 +1182,22 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
 
     const latScaleFactor = Math.cos(centerLat * Math.PI / 180);
 
-    // 2. Rotate helper
-    const angleRad = -rotationDeg * Math.PI / 180;
-    const cosA = Math.cos(angleRad);
-    const sinA = Math.sin(angleRad);
+    // 2. Rotate helper: convert azimuth bearing into horizontal corridor rotation angle
+    let effectiveRotDeg = rotationDeg;
+    if (effectiveRotDeg > 45 && effectiveRotDeg < 225) {
+      effectiveRotDeg -= 90;
+    } else if (effectiveRotDeg >= 225) {
+      effectiveRotDeg -= 270;
+    } else if (effectiveRotDeg < -45) {
+      effectiveRotDeg += 90;
+    }
+    effectiveRotDeg += 180; // Add 180 degrees so NOBID order runs left-to-right ascending
 
-    const getRotatedCoords = (lng: number, lat: number) => {
+    let angleRad = effectiveRotDeg * Math.PI / 180;
+    let cosA = Math.cos(angleRad);
+    let sinA = Math.sin(angleRad);
+
+    let getRotatedCoords = (lng: number, lat: number) => {
       const dx = (lng - centerLng) * latScaleFactor;
       const dy = lat - centerLat;
       const rotX = dx * cosA - dy * sinA;
@@ -1147,58 +1205,176 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
       return { rotX, rotY };
     };
 
-    // 3. Find the rotated bounding box of the matched parcel to scale correctly
-    let minRotX = Infinity, maxRotX = -Infinity;
-    let minRotY = Infinity, maxRotY = -Infinity;
+    // 3. Find rotated bounding box of the matched parcel ONLY first
+    let mMinX = Infinity, mMaxX = -Infinity;
+    let mMinY = Infinity, mMaxY = -Infinity;
+
     polygonPoints.forEach(([lng, lat]) => {
       const { rotX, rotY } = getRotatedCoords(lng, lat);
-      if (rotX < minRotX) minRotX = rotX;
-      if (rotX > maxRotX) maxRotX = rotX;
-      if (rotY < minRotY) minRotY = rotY;
-      if (rotY > maxRotY) maxRotY = rotY;
+      if (rotX < mMinX) mMinX = rotX;
+      if (rotX > mMaxX) mMaxX = rotX;
+      if (rotY < mMinY) mMinY = rotY;
+      if (rotY > mMaxY) mMaxY = rotY;
     });
 
-    const wRot = maxRotX - minRotX;
-    const hRot = maxRotY - minRotY;
+    let mWidth = mMaxX - mMinX;
+    let mHeight = mMaxY - mMinY;
+
+    // If bounding box is vertical (mWidth < mHeight), rotate 90 degrees to make corridor horizontal
+    if (mWidth < mHeight) {
+      effectiveRotDeg -= 90;
+      angleRad = effectiveRotDeg * Math.PI / 180;
+      cosA = Math.cos(angleRad);
+      sinA = Math.sin(angleRad);
+
+      getRotatedCoords = (lng: number, lat: number) => {
+        const dx = (lng - centerLng) * latScaleFactor;
+        const dy = lat - centerLat;
+        const rotX = dx * cosA - dy * sinA;
+        const rotY = dx * sinA + dy * cosA;
+        return { rotX, rotY };
+      };
+
+      mMinX = Infinity; mMaxX = -Infinity;
+      mMinY = Infinity; mMaxY = -Infinity;
+
+      polygonPoints.forEach(([lng, lat]) => {
+        const { rotX, rotY } = getRotatedCoords(lng, lat);
+        if (rotX < mMinX) mMinX = rotX;
+        if (rotX > mMaxX) mMaxX = rotX;
+        if (rotY < mMinY) mMinY = rotY;
+        if (rotY > mMaxY) mMaxY = rotY;
+      });
+
+      mWidth = mMaxX - mMinX;
+      mHeight = mMaxY - mMinY;
+    }
+
+    // Zoom calculation: focus closely on the matched parcel so it occupies ~70-80% of the map face
+    // making all vertices (P1, P2, P3...) and details crisp and clearly readable
+    const midRotX = (mMinX + mMaxX) / 2;
+    const midRotY = (mMinY + mMaxY) / 2;
+
+    // Set target view dimensions directly based on rotated parcel dimensions with ~35% margin
+    const targetW = Math.max(mWidth * 1.35, 0.00008);
+    const targetH = Math.max(mHeight * 1.35, 0.00005);
+
+    const containerAspect = boxW / boxH;
+    let viewW = targetW;
+    let viewH = targetH;
+
+    if (viewW / viewH < containerAspect) {
+      viewW = viewH * containerAspect;
+    } else {
+      viewH = viewW / containerAspect;
+    }
+
+    const wRot = viewW;
+    const hRot = viewH;
 
     if (wRot > 0 && hRot > 0) {
-      // Scale with 12mm horizontal and 8mm vertical padding
-      const scale = Math.min((boxW - 24) / wRot, (boxH - 16) / hRot);
-      const midRotX = (minRotX + maxRotX) / 2;
-      const midRotY = (minRotY + maxRotY) / 2;
+      const scale = Math.min((boxW - 10) / wRot, (boxH - 6) / hRot);
 
       const screenCenterX = boxX + boxW / 2;
       const screenCenterY = boxY + boxH / 2;
 
-      // 4. Draw all other background parcels first so they sit below the matched one
-      if (geojsonData && geojsonData.features) {
+      // Helper to compute centroid of polygon
+      const getCentroid = (pts: { x: number; y: number }[]) => {
+        const n = pts.length > 1 && pts[0].x === pts[pts.length - 1].x && pts[0].y === pts[pts.length - 1].y
+          ? pts.length - 1
+          : pts.length;
+        if (n <= 0) return { x: 0, y: 0 };
+        let sumX = 0, sumY = 0;
+        for (let i = 0; i < n; i++) {
+          sumX += pts[i].x;
+          sumY += pts[i].y;
+        }
+        return { x: sumX / n, y: sumY / n };
+      };
+
+      // 4. Draw all unhighlighted background parcels & features first
+      if (geojsonData && Array.isArray(geojsonData.features)) {
         geojsonData.features.forEach((feature: any) => {
           if (feature === matchedFeat) return;
-          
+
           const geom = feature.geometry;
           if (!geom) return;
-          
+
+          const props = feature.properties || {};
+
+          // Tower point or Tower polygon handling
+          const towerVal = findPropInObj(props, ['tower', 'tapaktower', 'no_tower', 'tapak']);
+          if (geom.type === 'Point') {
+            const [pLng, pLat] = geom.coordinates || [0, 0];
+            const { rotX, rotY } = getRotatedCoords(pLng, pLat);
+            const px = screenCenterX + (rotX - midRotX) * scale;
+            const py = screenCenterY - (rotY - midRotY) * scale;
+
+            if (px >= boxX && px <= boxX + boxW && py >= boxY && py <= boxY + boxH) {
+              doc.setDrawColor(185, 28, 28);
+              doc.setFillColor(255, 255, 255);
+              doc.setLineWidth(0.3);
+              doc.rect(px - 2.5, py - 2.5, 5, 5, 'FD');
+              doc.line(px - 2.5, py - 2.5, px + 2.5, py + 2.5);
+              doc.line(px - 2.5, py + 2.5, px + 2.5, py - 2.5);
+
+              const twName = towerVal ? `T.${towerVal}` : 'Tower';
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(6);
+              doc.setTextColor(185, 28, 28);
+              doc.text(twName, px, py - 3, { align: 'center' });
+            }
+            return;
+          }
+
           let featPoints: [number, number][] = [];
           if (geom.type === 'Polygon') {
             featPoints = geom.coordinates[0];
           } else if (geom.type === 'MultiPolygon') {
             featPoints = geom.coordinates[0][0];
           }
-          
+
           if (featPoints && featPoints.length > 0) {
-            // Map surrounding polygon to screen paper coordinates
             const paperPts = featPoints.map(([lng, lat]) => {
               const { rotX, rotY } = getRotatedCoords(lng, lat);
               const px = screenCenterX + (rotX - midRotX) * scale;
               const py = screenCenterY - (rotY - midRotY) * scale;
               return { x: px, y: py };
             });
-            
-            // Draw empty parcel outline (slate-300 light gray, thin)
-            doc.setDrawColor(203, 213, 225);
-            doc.setLineWidth(0.12);
-            for (let i = 0; i < paperPts.length - 1; i++) {
-              doc.line(paperPts[i].x, paperPts[i].y, paperPts[i + 1].x, paperPts[i + 1].y);
+
+            // Fill unhighlighted background parcel with clean white/light slate and dark outline
+            doc.setFillColor(255, 255, 255);
+            doc.setDrawColor(51, 65, 85);
+            doc.setLineWidth(0.2);
+
+            if (typeof (doc as any).polygon === 'function') {
+              (doc as any).polygon(paperPts, 'FD');
+            } else {
+              for (let i = 0; i < paperPts.length - 1; i++) {
+                doc.line(paperPts[i].x, paperPts[i].y, paperPts[i + 1].x, paperPts[i + 1].y);
+              }
+            }
+
+            // Extract NOBID label for unhighlighted polygon
+            let fNobid = '';
+            if (customMapping && customMapping.nobid && props[customMapping.nobid] !== undefined) {
+              fNobid = String(props[customMapping.nobid] || '');
+            }
+            if (!fNobid) {
+              fNobid = findPropInObj(props, ['nobid', 'nobiddc', 'nobiddis', 'nobidis', 'no_bidang', 'no_bid', 'nomor', 'nomer', 'id', 'fid', 'objectid', 'nib']);
+            }
+            if (!fNobid && towerVal) {
+              fNobid = `T.${towerVal}`;
+            }
+
+            if (fNobid) {
+              const { x: cx, y: cy } = getCentroid(paperPts);
+              if (cx >= boxX + 2 && cx <= boxX + boxW - 2 && cy >= boxY + 2 && cy <= boxY + boxH - 2) {
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(7);
+                doc.setTextColor(15, 23, 42);
+                doc.text(String(fNobid), cx, cy + 0.8, { align: 'center' });
+              }
             }
           }
         });
@@ -1212,25 +1388,36 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
         return { x: px, y: py };
       });
 
-      // Royal blue outline for matched polygon
+      // Fill with sky-blue / cyan and royal blue border (matching Image 2)
+      doc.setFillColor(125, 211, 252);
       doc.setDrawColor(2, 132, 199);
       doc.setLineWidth(0.4);
-      for (let i = 0; i < paperPoints.length - 1; i++) {
-        doc.line(paperPoints[i].x, paperPoints[i].y, paperPoints[i + 1].x, paperPoints[i + 1].y);
+
+      if (typeof (doc as any).polygon === 'function') {
+        (doc as any).polygon(paperPoints, 'FD');
+      } else {
+        for (let i = 0; i < paperPoints.length - 1; i++) {
+          doc.line(paperPoints[i].x, paperPoints[i].y, paperPoints[i + 1].x, paperPoints[i + 1].y);
+        }
+      }
+
+      // NOBID label inside highlighted polygon
+      const { x: mcx, y: mcy } = getCentroid(paperPoints);
+      if (mcx >= boxX && mcx <= boxX + boxW && mcy >= boxY && mcy <= boxY + boxH) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8);
+        doc.setTextColor(15, 23, 42);
+        doc.text(String(record.NOBID || '15'), mcx, mcy + 0.8, { align: 'center' });
       }
 
       // 6. Draw 4 white masking rectangles outside the box container to clean any bleed
       doc.setFillColor(255, 255, 255);
-      // Top mask (from Y=0 down to boxY=40mm)
       doc.rect(0, 0, 210, boxY, 'F');
-      // Bottom mask
       doc.rect(0, boxY + boxH, 210, 297 - (boxY + boxH), 'F');
-      // Left mask
       doc.rect(0, boxY, boxX, boxH, 'F');
-      // Right mask
       doc.rect(boxX + boxW, boxY, 210 - (boxX + boxW), boxH, 'F');
 
-      // Redraw Header & Title over the top mask so logos and header line are 100% pristine and unaffected
+      // Redraw Header & Title over the top mask
       drawPageHeader(currentPNum);
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(10);
@@ -1246,7 +1433,7 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
       doc.setLineWidth(0.35);
       doc.rect(boxX, boxY, boxW, boxH, 'D');
 
-      // 8. Draw Compass rose rotated with the same map rotation!
+      // 8. Draw Compass rose rotated with effective map rotation!
       const compX = boxX + boxW - 12;
       const compY = boxY + 12;
       doc.setDrawColor(148, 163, 184);
@@ -1254,7 +1441,7 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
       doc.circle(compX, compY, 3.5, 'S');
 
       // Rotation needles
-      const theta = -rotationDeg * Math.PI / 180;
+      const theta = -effectiveRotDeg * Math.PI / 180;
       const uX = compX + Math.sin(theta) * 3.5;
       const uY = compY - Math.cos(theta) * 3.5;
       const sX = compX - Math.sin(theta) * 3.5;
@@ -1285,16 +1472,18 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
       doc.text('T', compX + Math.sin(perpAngle) * labelDist, compY - Math.cos(perpAngle) * labelDist + 0.8, { align: 'center' });
       doc.text('B', compX - Math.sin(perpAngle) * labelDist, compY + Math.cos(perpAngle) * labelDist + 0.8, { align: 'center' });
 
-      // 9. Label vertex points on the matched polygon (so they always draw on top of everything)
+      // 9. Label vertex points on the matched polygon
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(6);
-      doc.setTextColor(30, 41, 59);
+      doc.setFontSize(6.5);
+      doc.setTextColor(15, 23, 42);
 
       const uniquePts = paperPoints.slice(0, paperPoints.length - 1);
       uniquePts.forEach((pt, i) => {
-        doc.setFillColor(2, 132, 199);
-        doc.circle(pt.x, pt.y, 0.7, 'F');
-        doc.text(`P${i + 1}`, pt.x + 1.2, pt.y - 1);
+        if (pt.x >= boxX - 1 && pt.x <= boxX + boxW + 1 && pt.y >= boxY - 1 && pt.y <= boxY + boxH + 1) {
+          doc.setFillColor(2, 132, 199);
+          doc.circle(pt.x, pt.y, 0.8, 'F');
+          doc.text(`P${i + 1}`, pt.x + 1.2, pt.y - 0.8);
+        }
       });
     } else {
       doc.setFont('helvetica', 'italic');
