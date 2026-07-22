@@ -7,7 +7,7 @@ export const MAIN_FOLDER_NAME = "SIP_Berkas_Pertanahan_Desa";
 /**
  * Fetch wrapper with built-in timeout to prevent requests from hanging indefinitely
  */
-export async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 10000): Promise<Response> {
+export async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 30000): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -158,7 +158,7 @@ export async function fetchSpreadsheetRecords(accessToken: string, spreadsheetId
     const range = "A1:ZZ5000";
     const response = await fetchWithTimeout(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`, {
       headers: { Authorization: `Bearer ${accessToken}` }
-    }, 12000);
+    }, 30000);
     
     if (!response.ok) {
       await handleResponseError(response, "Gagal mengambil data dari spreadsheet");

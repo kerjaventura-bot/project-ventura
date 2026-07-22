@@ -103,7 +103,7 @@ function formatGoogleCsvUrl(url: string): string {
 async function fetchPublicCsvContent(url: string): Promise<string> {
   const formattedUrl = formatGoogleCsvUrl(url);
   try {
-    const res = await fetchWithTimeout(formattedUrl, { mode: 'cors' }, 8000);
+    const res = await fetchWithTimeout(formattedUrl, { mode: 'cors' }, 15000);
     if (res.ok) {
       const text = await res.text();
       if (text && !text.trim().startsWith('<!DOCTYPE') && !text.trim().startsWith('<html')) {
@@ -116,7 +116,7 @@ async function fetchPublicCsvContent(url: string): Promise<string> {
 
   try {
     const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(formattedUrl)}`;
-    const res = await fetchWithTimeout(proxyUrl, {}, 8000);
+    const res = await fetchWithTimeout(proxyUrl, {}, 15000);
     if (res.ok) {
       const text = await res.text();
       if (text && !text.trim().startsWith('<!DOCTYPE') && !text.trim().startsWith('<html')) {
@@ -891,7 +891,7 @@ export default function App() {
       let sheetId = activeProj.spreadsheetId;
       let uploadsFolderId = activeProj.uploadsFolderId;
       
-      // Execute setup & fetch with a 10-second maximum timeout
+      // Execute setup & fetch with a 35-second maximum timeout
       const syncPromise = (async () => {
         // If any is missing, automate creation in Drive under "PROJECT_VENTURA"
         if (!folderId || !sheetId || !uploadsFolderId) {
@@ -921,7 +921,7 @@ export default function App() {
       })();
 
       const timeoutPromise = new Promise<never>((_, reject) => 
-        setTimeout(() => reject(new Error('Koneksi Google Drive/Sheets timeout (10 detik). Mengalihkan ke data cadangan...')), 10000)
+        setTimeout(() => reject(new Error('Koneksi Google Drive/Sheets timeout (35 detik). Mengalihkan ke data cadangan...')), 35000)
       );
 
       const { items } = await Promise.race([syncPromise, timeoutPromise]);
