@@ -6,6 +6,12 @@ import { doc, getDoc, setDoc, collection, addDoc, getDocs, deleteDoc, onSnapshot
 import { 
   findOrCreateSpreadsheet, fetchSpreadsheetRecords, saveRecordToSpreadsheet, setupProjectDriveStructure, findOrCreateFolder, fetchWithTimeout 
 } from './lib/googleApi';
+import {
+  saveGeoJSONLayerToFirestore,
+  loadGeoJSONLayerDoc,
+  deleteGeoJSONLayerFromFirestore,
+  saveLayerToLocalStorage
+} from './lib/geojsonStorage';
 import { type LandRecord, compareLandRecords, type OperatorConfig } from './types';
 import Dashboard from './components/Dashboard';
 import FormInput from './components/FormInput';
@@ -490,20 +496,10 @@ export default function App() {
 
   // Real-time synchronization of custom GeoJSON layers from Firestore
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'geojson_layers'), (snapshot) => {
-      const customLayers: any[] = [];
-      snapshot.forEach((docSnap) => {
-        const item = docSnap.data();
-        customLayers.push({
-          id: docSnap.id,
-          name: item.name || '',
-          type: item.type || 'bidang',
-          data: item.data,
-          visible: item.visible !== undefined ? item.visible : true,
-          isDefault: false,
-          fieldMapping: item.fieldMapping || null
-        });
-      });
+    const unsubscribe = onSnapshot(collection(db, 'geojson_layers'), async (snapshot) => {
+      const docPromises = snapshot.docs.map(docSnap => loadGeoJSONLayerDoc(docSnap));
+      const customLayers = await Promise.all(docPromises);
+
       // Combine and remove duplicates by ID
       const mergedMap = new Map<string, any>();
       
@@ -521,7 +517,7 @@ export default function App() {
           ...existing,
           ...c,
           name: c.name || existing?.name || '',
-          data: c.data || existing?.data,
+          data: (c.data?.features?.length ? c.data : (existing?.data || c.data)),
           type: c.type || existing?.type || 'bidang',
           fieldMapping: c.fieldMapping || existing?.fieldMapping || null
         });
@@ -552,28 +548,13 @@ export default function App() {
       return [...prev, newLayer];
     });
 
-    // Always update localStorage so client reliably retains layer data
-    try {
-      const localGeoJSONs = JSON.parse(localStorage.getItem('local_geojson_layers') || '[]');
-      const filtered = localGeoJSONs.filter((l: any) => l.id !== newId);
-      filtered.push(newLayer);
-      localStorage.setItem('local_geojson_layers', JSON.stringify(filtered));
-    } catch (e) {}
+    // Always update localStorage safely without throwing quota error
+    saveLayerToLocalStorage(newLayer);
 
     try {
-      await setDoc(doc(db, 'geojson_layers', newId), {
-        name,
-        type,
-        data,
-        visible: true,
-        isDefault: false,
-        fieldMapping: null
-      });
+      await saveGeoJSONLayerToFirestore(newLayer);
     } catch (err: any) {
       console.warn('Gagal menyimpan GeoJSON ke Firestore:', err);
-      if (err?.message?.includes('exceeds') || err?.code === 'invalid-argument') {
-        alert(`Berkas GeoJSON "${name}" berhasil diunggah di browser lokal. Karena ukurannya melebihi batas 1MB Firestore Cloud, berkas disimpan secara lokal dan tetap ditampilkan di Peta Spasial.`);
-      }
     }
   };
 
@@ -589,6 +570,8 @@ export default function App() {
   };
 
   const handleRemoveGeoJSON = async (id: string) => {
+    const targetLayer = loadedGeoJSONs.find(g => g.id === id);
+
     // 1. Immediately remove from localStorage first
     try {
       const localGeoJSONs = JSON.parse(localStorage.getItem('local_geojson_layers') || '[]');
@@ -601,7 +584,7 @@ export default function App() {
 
     // 3. Delete from Firestore in background
     try {
-      await deleteDoc(doc(db, 'geojson_layers', id));
+      await deleteGeoJSONLayerFromFirestore(id, targetLayer?.chunked);
     } catch (err) {
       console.warn('Gagal menghapus GeoJSON dari Firestore:', err);
     }

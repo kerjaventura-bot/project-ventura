@@ -7,6 +7,12 @@ import {
 import type { LandRecord } from '../types';
 import { db } from '../lib/firebase';
 import { collection, getDocs, deleteDoc, doc, setDoc, onSnapshot } from 'firebase/firestore';
+import {
+  saveGeoJSONLayerToFirestore,
+  loadGeoJSONLayerDoc,
+  deleteGeoJSONLayerFromFirestore,
+  saveLayerToLocalStorage
+} from '../lib/geojsonStorage';
 
 interface InteractiveMapProps {
   records: LandRecord[];
@@ -318,20 +324,9 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
     mapRef.current = map;
 
     // Real-time synchronization of custom GeoJSON layers from Firestore
-    const unsubscribe = onSnapshot(collection(db, 'geojson_layers'), (snapshot) => {
-      const customLayers: LoadedGeoJSON[] = [];
-      snapshot.forEach((docSnap) => {
-        const item = docSnap.data();
-        customLayers.push({
-          id: docSnap.id,
-          name: item.name || '',
-          type: item.type || 'bidang',
-          data: item.data,
-          visible: item.visible !== undefined ? item.visible : true,
-          isDefault: false,
-          fieldMapping: item.fieldMapping || null
-        });
-      });
+    const unsubscribe = onSnapshot(collection(db, 'geojson_layers'), async (snapshot) => {
+      const docPromises = snapshot.docs.map(docSnap => loadGeoJSONLayerDoc(docSnap));
+      const customLayers = await Promise.all(docPromises);
 
       // Merge local fallback layers from localStorage
       const mergedMap = new Map<string, LoadedGeoJSON>();
@@ -345,7 +340,7 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
           ...existing,
           ...c,
           name: c.name || existing?.name || '',
-          data: c.data || existing?.data,
+          data: (c.data?.features?.length ? c.data : (existing?.data || c.data)),
           type: c.type || existing?.type || 'bidang',
           fieldMapping: c.fieldMapping || existing?.fieldMapping || null
         });
@@ -553,13 +548,15 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
     });
 
     if (!isDefault && !existingId) {
+      saveLayerToLocalStorage(newLayer);
       try {
-        await setDoc(doc(db, 'geojson_layers', id), {
+        await saveGeoJSONLayerToFirestore({
+          id,
           name,
           type,
           data,
-          projectId: activeProjectId || 'global',
-          createdAt: new Date().toISOString()
+          visible: true,
+          projectId: activeProjectId || 'global'
         });
       } catch (err) {
         console.error('Gagal menyimpan GeoJSON ke Firestore:', err);
@@ -577,7 +574,7 @@ export default function InteractiveMap({ records, role, activeProjectName, activ
     const layer = loadedGeoJSONs.find(g => g.id === id);
     if (layer && !layer.isDefault) {
       try {
-        await deleteDoc(doc(db, 'geojson_layers', id));
+        await deleteGeoJSONLayerFromFirestore(id, (layer as any).chunked);
       } catch (err) {
         console.error('Gagal menghapus GeoJSON dari Firestore:', err);
       }

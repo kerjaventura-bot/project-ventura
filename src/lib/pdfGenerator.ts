@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import { type LandRecord } from '../types';
 import { db } from './firebase';
 import { collection, getDocs } from 'firebase/firestore';
+import { loadGeoJSONLayerDoc } from './geojsonStorage';
 
 const findPropInObj = (obj: any, keys: string[]): string => {
   if (!obj) return '';
@@ -1049,8 +1050,10 @@ export async function generateInventoryPDF(record: LandRecord, projectName: stri
     // 2. Gather custom layers and field mapping from Firestore
     try {
       const querySnapshot = await getDocs(collection(db, 'geojson_layers'));
-      querySnapshot.forEach((docSnap) => {
-        const l = docSnap.data();
+      const docPromises = querySnapshot.docs.map(docSnap => loadGeoJSONLayerDoc(docSnap));
+      const layers = await Promise.all(docPromises);
+
+      layers.forEach((l) => {
         if (l.fieldMapping && !customMapping) {
           customMapping = l.fieldMapping;
         }
